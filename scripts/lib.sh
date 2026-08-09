@@ -145,16 +145,41 @@ wait_app() {
 
 # Wait until Argo CD has observed a specific commit for an Application. This is
 # what makes "the change arrived through Git" provable rather than assumed.
+#
+# Argo CD does not learn about a commit the moment it is pushed. In production
+# GitHub calls its webhook; a cluster on a laptop has no address GitHub can
+# reach, so the controller falls back to polling the repository every three
+# minutes (timeout.reconciliation). Waiting passively therefore means waiting
+# up to three minutes per commit, and a wait shorter than that lands right on
+# the boundary and fails intermittently - which is exactly what happened here:
+# the first commit was observed because the caller happened to force a refresh,
+# and the second and third silently were not.
+#
+# So ask, rather than wait. The refresh annotation is what the UI's REFRESH
+# button sets, and it is the honest local stand-in for the webhook.
+#
+# On timeout this aborts. If the controller never saw the commit then nothing
+# after this point in a transcript is describing the change under discussion.
 wait_revision() {
     local app="$1" sha="$2" tries="${3:-90}"
+    local i=0
     for _ in $(seq "$tries"); do
         local got
         got=$(kargo get application "$app" -o jsonpath='{.status.sync.revision}' 2>/dev/null)
         [ "${got:0:8}" = "${sha:0:8}" ] && return 0
+        i=$((i + 1))
+        if [ $((i % 5)) -eq 0 ]; then
+            kargo annotate application "$app" argocd.argoproj.io/refresh=normal \
+                --overwrite >/dev/null 2>&1
+        fi
         sleep 2
     done
-    echo "[warning: ${app} did not report revision ${sha:0:8} in time]"
-    return 1
+    echo
+    echo "[FATAL] ${app} never reported revision ${sha:0:8}."
+    echo "        The controller has not seen this commit, so everything after"
+    echo "        this point would describe a change it never applied."
+    finish
+    exit 1
 }
 
 # How the commit reaches origin.
