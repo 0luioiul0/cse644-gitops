@@ -299,21 +299,21 @@ data:
         {
           "id": 10,
           "type": "timeseries",
-          "title": "ingress requests by host",
-          "description": "Measured at the ingress controller, so the web workload is covered without an exporter sidecar per replica. web.gitops.local is the nginx application; api.gitops.local is the Python one.",
+          "title": "api mean latency by route",
+          "description": "rate(sum)/rate(count) per route, which separates a slow endpoint from a slow service. This panel is what exposed the instrumentation bug fixed in 1.2.0: /metrics reported a 13.2s mean against a 15s scrape interval, because the request timer started before the blocking keep-alive read and counted the client's idle time as latency. There is deliberately no ingress-controller panel: this cluster's ingress-nginx runs with metrics disabled, and enabling it would mean editing a Deployment this repository does not manage.",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
           "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
           "targets": [
             {
               "refId": "A",
               "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
-              "expr": "sum by (host) (rate(nginx_ingress_controller_requests{namespace=~\"cse644.*\"}[1m]))",
-              "legendFormat": "{{host}}"
+              "expr": "sum by (route) (rate(cse644_api_request_duration_seconds_sum[5m])) / sum by (route) (rate(cse644_api_request_duration_seconds_count[5m]))",
+              "legendFormat": "{{route}}"
             }
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": "reqps",
+              "unit": "s",
               "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never" }
             },
             "overrides": []

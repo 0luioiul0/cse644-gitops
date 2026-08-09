@@ -1,24 +1,33 @@
 # Prometheus scrape configuration.
 #
-# Four jobs, each answering a different question:
+# Three jobs, each answering a different question:
 #
 #   kubernetes-pods   the application's own metrics. Targets are discovered by
 #                     annotation, not listed by hand, so a new instrumented
 #                     workload joins monitoring by adding three lines to its
 #                     Pod template - no change here, no Prometheus restart.
-#   ingress-nginx     HTTP traffic as the edge sees it: rate, status and
-#                     latency per Ingress host. This is why the web workload
-#                     carries no /metrics endpoint of its own. Instrumenting
-#                     nginx would mean an exporter sidecar per Pod measuring
-#                     one replica each; the controller already measures every
-#                     request that entered the cluster, labelled by host and
-#                     path, for free.
 #   kubelet-cadvisor  container CPU and memory, from the kubelet, reached
 #                     through the API server proxy. Answers "is the workload
 #                     resource-starved" - a question application metrics cannot.
-#   argocd            the GitOps controller itself. argocd_app_info carries a
-#                     sync_status label, so "how long did the cluster sit
-#                     OutOfSync" becomes a graph rather than a screenshot.
+#   argocd            the GitOps controller itself. argocd_app_info carries
+#                     health_status and sync_status labels, so "how long did
+#                     the cluster sit OutOfSync" becomes a graph rather than a
+#                     screenshot.
+#
+# There was a fourth, scraping the ingress controller for per-host request
+# rate and latency, and it is gone because it collected nothing. The target was
+# reported up, which is what made it convincing: :10254 answers, but this
+# cluster's ingress-nginx - installed by Assignment 02 from the kind deploy
+# manifest - runs without metrics enabled, so all that endpoint serves is 128
+# lines of Go runtime statistics and not one nginx_ingress_controller_* series.
+# `up == 1` means the scrape succeeded, not that the data exists.
+#
+# Turning it on means editing a Deployment in the ingress-nginx namespace,
+# which this repository does not own and Argo CD does not manage. Doing that by
+# hand would be precisely the unmanaged change this assignment argues against,
+# so the job is removed and the gap recorded instead: HTTP rate and latency
+# come from the application's own instrumentation, which measures the same
+# requests one hop later.
 #
 # Storage is a 2Gi PVC with 12h retention - enough to keep a demonstration's
 # history across a Pod restart, small enough for a laptop cluster.
@@ -92,36 +101,6 @@ data:
             target_label: app
 
       # ------------------------------------------------------------------
-      # The ingress controller's own metrics on port 10254.
-      #
-      # A Pod with three declared container ports produces three discovery
-      # targets; without the port-name filter all three would be rewritten to
-      # :10254 and Prometheus would scrape the same endpoint three times under
-      # three target names. Relabel regexes are fully anchored, so `http`
-      # matches the port named http and not the one named https.
-      # ------------------------------------------------------------------
-      - job_name: ingress-nginx
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: [ingress-nginx]
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
-            action: keep
-            regex: controller
-          - source_labels: [__meta_kubernetes_pod_container_port_name]
-            action: keep
-            regex: http
-          - source_labels: [__address__]
-            action: replace
-            regex: ([^:]+)(?::\d+)?
-            replacement: $1:10254
-            target_label: __address__
-          - source_labels: [__meta_kubernetes_pod_name]
-            action: replace
-            target_label: pod
-
-      # ------------------------------------------------------------------
       # Container CPU and memory from each kubelet's cAdvisor endpoint,
       # reached through the API server's /proxy subresource. Going through the
       # API server means the ServiceAccount token already in the Pod is the
@@ -167,22 +146,23 @@ data:
       # Argo CD. Makes the GitOps controller's own behaviour measurable:
       # argocd_app_info carries health_status and sync_status labels, and
       # argocd_app_sync_total counts sync operations by phase.
+      #
+      # These are Service addresses rather than discovered Pods, and that is
+      # deliberate. This job originally used `role: pod` and kept any Pod with
+      # a container port named `metrics`, which found exactly one component -
+      # the ApplicationSet controller - and therefore collected no
+      # argocd_app_info at all, while reporting the target up. The series that
+      # matter come from the application controller, and
+      # argocd-application-controller-0 declares no container ports whatsoever,
+      # so Pod discovery can never see it. Its metrics are reachable only
+      # through the argocd-metrics Service, which is what upstream expects you
+      # to scrape.
       # ------------------------------------------------------------------
       - job_name: argocd
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: [argocd]
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_container_port_name]
-            action: keep
-            regex: metrics
-          - source_labels: [__meta_kubernetes_pod_phase]
-            action: keep
-            regex: Running
-          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
-            action: replace
-            target_label: app
-          - source_labels: [__meta_kubernetes_pod_name]
-            action: replace
-            target_label: pod
+        static_configs:
+          - targets: ["argocd-metrics.argocd.svc.cluster.local:8082"]
+            labels: { component: application-controller }
+          - targets: ["argocd-server-metrics.argocd.svc.cluster.local:8083"]
+            labels: { component: api-server }
+          - targets: ["argocd-applicationset-controller.argocd.svc.cluster.local:8080"]
+            labels: { component: applicationset-controller }

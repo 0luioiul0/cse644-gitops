@@ -340,24 +340,51 @@ class Handler(BaseHTTPRequestHandler):
             return default
 
     # --------------------------------------------------------- instrumentation
+    #
+    # The clock starts in parse_request, not in handle_one_request, and that
+    # distinction is the whole point of these two methods.
+    #
+    # BaseHTTPRequestHandler.handle_one_request() *begins* by blocking on
+    # rfile.readline() for the next request line. On a keep-alive connection
+    # that block lasts until the client sends its next request - which for
+    # Prometheus is the full scrape interval. Timing from the top of
+    # handle_one_request therefore records the client's idle time as server
+    # latency: this application reported a mean of 13.2s for /metrics against
+    # a 15s scrape interval, and a p99 pinned to the top histogram bucket,
+    # while every request was in fact answered in about three milliseconds.
+    # In-flight had the same flaw, counting parked connections as work.
+    #
+    # parse_request runs immediately after the request line has been read, so
+    # starting there measures handling and nothing else.
+    def parse_request(self):
+        global _IN_FLIGHT
+        ok = BaseHTTPRequestHandler.parse_request(self)
+        if ok:
+            self._start = time.time()
+            with _LOCK:
+                _IN_FLIGHT += 1
+            self._counted = True
+        return ok
+
     def handle_one_request(self):
         """Wrap every request so latency and concurrency are measured once,
         here, rather than being sprinkled through each route."""
         global _IN_FLIGHT
-        with _LOCK:
-            _IN_FLIGHT += 1
-        start = time.time()
         self._status = 0
+        self._start = None
+        self._counted = False
         try:
             BaseHTTPRequestHandler.handle_one_request(self)
         finally:
-            elapsed = time.time() - start
-            with _LOCK:
-                _IN_FLIGHT -= 1
-            # command/path are unset if the client dropped before sending a
-            # request line; there is nothing meaningful to record then.
-            if self._status and getattr(self, "command", None):
-                observe(self.command, route_label(self._path()), self._status, elapsed)
+            if self._counted:
+                elapsed = time.time() - self._start
+                with _LOCK:
+                    _IN_FLIGHT -= 1
+                # command/path are unset if the client dropped before sending a
+                # request line; there is nothing meaningful to record then.
+                if self._status and getattr(self, "command", None):
+                    observe(self.command, route_label(self._path()), self._status,
+                            elapsed)
 
     # ------------------------------------------------------------------ verbs
     def do_GET(self):

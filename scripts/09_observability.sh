@@ -132,8 +132,30 @@ EOF
 echo "\$ kubectl -n default apply -f - <<'EOF'   # loadgen Pod, script from the ConfigMap above"
 echo "pod/loadgen created"
 run "k -n default wait --for=condition=Ready pod/loadgen --timeout=120s"
-run "k -n default logs -f loadgen"
-stamp "load generation finished"
+note "Not 'kubectl logs -f'. That opens an fsnotify watch, this host's"
+note "fs.inotify.max_user_instances is 128 and already exhausted, and the"
+note "follow dies instantly with 'too many open files'. An earlier run read"
+note "that as the generator having finished: it queried Prometheus thirty"
+note "seconds into a four-minute workload, reported a peak of 1.4 req/s, and"
+note "then deleted the Pod mid-run. Poll for the Pod to reach a terminal"
+note "phase instead, which depends on nothing but the API server."
+stamp "waiting for the load generator to finish"
+PH=""
+for _ in $(seq 1 120); do
+    PH=$(k -n default get pod loadgen -o jsonpath='{.status.phase}' 2>/dev/null)
+    case "$PH" in Succeeded|Failed) break ;; esac
+    sleep 5
+done
+stamp "load generator finished in phase ${PH:-<unknown>}"
+run "k -n default logs loadgen"
+if [ "$PH" != "Succeeded" ]; then
+    echo
+    echo "[FATAL] the load generator did not complete (phase ${PH:-<unknown>})."
+    echo "        Querying now would describe a workload that never ran."
+    run "k -n default describe pod loadgen | sed -n '/Events:/,\$p'"
+    finish
+    exit 1
+fi
 note "Waiting 30s so the final phase lands inside a completed scrape window."
 sleep 30
 
@@ -169,7 +191,6 @@ q_and_print "notes on the persistent volume" 'cse644_api_notes_stored' '%.0f'
 q_and_print "running version" 'cse644_api_build_info' '%.0f'
 q_and_print "peak container CPU, cse644-gitops namespace" 'max_over_time(sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="cse644-gitops"}[2m]))[15m:30s])'
 q_and_print "container memory working set" 'sum by (pod) (container_memory_working_set_bytes{namespace="cse644-gitops"})' '%.0f'
-q_and_print "ingress request rate by host" 'sum by (host) (rate(nginx_ingress_controller_requests[15m]))'
 q_and_print "Argo CD applications by sync status" 'sum by (sync_status) (argocd_app_info)' '%.0f'
 q_and_print "Argo CD applications by health" 'sum by (health_status) (argocd_app_info)' '%.0f'
 

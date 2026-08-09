@@ -1,4 +1,4 @@
-# The instrumented port 8888 application.
+﻿# The instrumented port 8888 application.
 #
 # Single replica with the Recreate strategy: the PersistentVolumeClaim is
 # ReadWriteOnce on a node-local StorageClass, so two Pods cannot hold it at
@@ -65,7 +65,7 @@ spec:
             claimName: api-data
       containers:
         - name: api
-          image: docker.io/luioiul/cse644-gitops-api:1.1.0
+          image: docker.io/luioiul/cse644-gitops-api:1.2.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
