@@ -24,7 +24,10 @@ API_FILE="${ROOT}/k8s/23-api-deployment.yaml"
 
 start_log "06-git-driven-change"
 
-CUR_REV=$(grep -oE 'cse644\.dev/config-revision: "[0-9]+"' "$DEPLOY_FILE" | grep -oE '[0-9]+')
+# Capture the quoted value only. Piping through `grep -oE '[0-9]+'` also
+# matches the 644 in the annotation's own domain name, which yields two lines
+# and an arithmetic error on the next line.
+CUR_REV=$(sed -n 's/.*cse644\.dev\/config-revision: "\([0-9][0-9]*\)".*/\1/p' "$DEPLOY_FILE" | head -1)
 NEW_REV=$((CUR_REV + 1))
 NEW_MESSAGE="Customized Nginx, reconciled from Git by Argo CD (config revision ${NEW_REV})."
 
@@ -76,6 +79,7 @@ wait_revision cse644-platform "$HEAD_SHA" 90
 stamp "observed - watching the rollout"
 run "kn rollout status deploy/web --timeout=180s"
 wait_app cse644-platform Synced Healthy 120
+wait_http "${INGRESS}/message" 60 "${WEB_HOST}"
 
 step "Now the application has changed"
 run "ing ${WEB_HOST} ${INGRESS}/message"
@@ -101,6 +105,16 @@ else
     stamp "observed - watching the rollout"
     run "kn rollout status deploy/api --timeout=240s"
     wait_app cse644-platform Synced Healthy 120
+
+    note "rollout status returns as soon as the Pod reports Ready. The ingress"
+    note "controller still has to observe the new EndpointSlice before it has an"
+    note "upstream to send to, so requests in that gap get a 503 from nginx, not"
+    note "from the application. With strategy: Recreate there is no old Pod left"
+    note "to absorb them - the gap is a real, if short, outage. So wait for the"
+    note "entry point rather than assume the rollout implies it."
+    stamp "waiting for the ingress to route to the new Pod"
+    wait_http "${INGRESS}/api/info" 60 "${API_HOST}"
+    stamp "entry point is serving"
 
     step "The new version is live, and it brought a new metric with it"
     run "ing ${API_HOST} ${INGRESS}/api/info | python3 -c \"import json,sys; d=json.load(sys.stdin); print('version:', d['version'], '| pod:', d['pod'])\""

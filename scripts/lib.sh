@@ -157,15 +157,65 @@ wait_revision() {
     return 1
 }
 
-# Commit and push. The credential helper lives in this clone's .git/config and
-# is never printed; nothing about it reaches these transcripts.
+# How the commit reaches origin.
+#
+#   direct     this shell runs `git push` itself. The normal case.
+#   external   this shell commits, and something outside it pushes. Needed on
+#              a machine where the shell running these scripts cannot
+#              authenticate to GitHub - this one is a WSL2 distro with Windows
+#              interop unregistered, so the clone's credential helper, which
+#              shells out to the Windows GitHub CLI, cannot execute at all.
+#
+# Either way the commit counts as delivered only once origin really has it,
+# which is checked below rather than assumed.
+PUSH_MODE="${PUSH_MODE:-direct}"
+
+# Wait until origin's branch head actually equals the given commit.
+# Read-only, so it needs no credential on a public repository.
+wait_remote() {
+    local sha="$1" tries="${2:-90}"
+    for _ in $(seq "$tries"); do
+        [ "$(git -C "$ROOT" ls-remote origin "$BRANCH" 2>/dev/null | cut -f1)" = "$sha" ] && return 0
+        sleep 2
+    done
+    return 1
+}
+
+# Commit and get it to origin. The credential helper lives in this clone's
+# .git/config and is never printed; nothing about it reaches these transcripts.
+#
+# `git push` exiting 0 is not proof that origin has the commit, and a push that
+# failed must never be reported as a change that reached the cluster: Argo CD
+# pulls from origin, so every later assertion in the transcript - "the new
+# version is live", "the rollout completed" - would be describing a commit the
+# controller cannot see. So this verifies, and aborts the script if the commit
+# did not land. An earlier run of this repository produced exactly that
+# transcript: three failed pushes, and pages of confident output about a
+# deployment that never happened.
 commit_push() {
     local message="$1"; shift
     run "git -C '$ROOT' add $*"
     run "git -C '$ROOT' commit -m '$message'"
-    run "git -C '$ROOT' push origin $BRANCH"
     HEAD_SHA=$(git -C "$ROOT" rev-parse HEAD)
-    note "pushed $(git -C "$ROOT" rev-parse --short HEAD)"
+
+    if [ "$PUSH_MODE" = "direct" ]; then
+        run "git -C '$ROOT' push origin $BRANCH"
+    else
+        note "PUSH_MODE=${PUSH_MODE}: this shell cannot authenticate to GitHub,"
+        note "so the commit is delivered to origin by tooling outside it."
+    fi
+
+    if wait_remote "$HEAD_SHA"; then
+        note "origin/${BRANCH} is now ${HEAD_SHA:0:8} - the controller can fetch it"
+    else
+        echo
+        echo "[FATAL] ${HEAD_SHA:0:8} never reached origin/${BRANCH}."
+        echo "        Everything after this point would describe a change that"
+        echo "        Argo CD cannot see. Stopping here rather than writing a"
+        echo "        transcript that claims otherwise."
+        finish
+        exit 1
+    fi
 }
 
 finish() {
