@@ -261,6 +261,13 @@ commit_push() {
     local message="$1"; shift
     run "git -C '$ROOT' add $*"
     run "git -C '$ROOT' commit -m '$message'"
+    deliver_head
+}
+
+# Get whatever is at HEAD to origin, and prove it arrived. Separate from
+# commit_push because some commits are not made by it - `git revert` in
+# scripts/08_failure_recovery.sh writes its own.
+deliver_head() {
     HEAD_SHA=$(git -C "$ROOT" rev-parse HEAD)
 
     if [ "$PUSH_MODE" = "direct" ]; then

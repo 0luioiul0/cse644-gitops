@@ -104,9 +104,9 @@ note "production again. The recovery has to happen where the desired state"
 note "lives."
 run "git -C '$ROOT' revert --no-edit ${BAD_SHA}"
 run "git -C '$ROOT' show --stat HEAD"
-run "git -C '$ROOT' push origin ${BRANCH}"
-GOOD_SHA=$(git -C "$ROOT" rev-parse HEAD)
-stamp "pushed the revert as ${GOOD_SHA:0:8}"
+deliver_head
+GOOD_SHA="$HEAD_SHA"
+stamp "the revert is on origin as ${GOOD_SHA:0:8}"
 
 run "argo app get cse644-platform --refresh >/dev/null"
 wait_revision cse644-platform "$GOOD_SHA" 120
