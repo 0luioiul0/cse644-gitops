@@ -65,7 +65,7 @@ spec:
             claimName: api-data
       containers:
         - name: api
-          image: docker.io/luioiul/cse644-gitops-api:1.9.9-tag-that-does-not-exist
+          image: docker.io/luioiul/cse644-gitops-api:1.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
