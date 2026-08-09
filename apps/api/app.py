@@ -116,9 +116,18 @@ def observe(method, route, status, elapsed):
             _LATENCY[route] = entry
         entry["sum"] += elapsed
         entry["count"] += 1
+        # Store *per-bucket* counts, not cumulative ones: increment the
+        # smallest bucket this observation fits in and stop. render_metrics()
+        # is what turns these into the cumulative counts the exposition format
+        # requires. Incrementing every matching bucket here and accumulating
+        # there as well would count each observation once per bucket - which is
+        # exactly the bug this comment exists to prevent a repeat of.
+        # An observation larger than the last edge lands in no bucket at all;
+        # +Inf is emitted from `count`, so it is still counted.
         for i, edge in enumerate(LATENCY_BUCKETS):
             if elapsed <= edge:
                 entry["buckets"][i] += 1
+                break
 
 
 def _escape(value):
