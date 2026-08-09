@@ -206,6 +206,36 @@ wait_remote() {
     return 1
 }
 
+# Wait until the Application has *finished a sync operation* for a revision,
+# rather than merely reporting that revision as its current one.
+#
+# These are two different facts and the difference is a race that produces
+# confident, wrong demonstrations. `.status.sync` is written by the comparison
+# loop: it says "live matches revision X" the moment the comparison says so.
+# `.status.operationState` is written by the syncing machinery: it says "the
+# apply for revision X ran and finished". A new commit makes the app report
+# Synced at X while the automated sync for X is still queued, and that queued
+# sync applies *every* manifest when it runs. Drift introduced in that window
+# is erased by it, which is indistinguishable from selfHeal if all you check
+# is the sync status - scripts/07 asserted exactly that until this existed.
+wait_sync_operation() {
+    local app="$1" sha="$2" tries="${3:-90}"
+    for _ in $(seq "$tries"); do
+        local phase rev sync
+        phase=$(kargo get application "$app" -o jsonpath='{.status.operationState.phase}' 2>/dev/null)
+        rev=$(kargo get application "$app" -o jsonpath='{.status.operationState.syncResult.revision}' 2>/dev/null)
+        sync=$(kargo get application "$app" -o jsonpath='{.status.sync.status}' 2>/dev/null)
+        if [ "$phase" = "Succeeded" ] && [ "${rev:0:8}" = "${sha:0:8}" ] && [ "$sync" = "Synced" ]; then
+            return 0
+        fi
+        sleep 2
+    done
+    echo
+    echo "[FATAL] ${app} never completed a sync operation for ${sha:0:8}."
+    finish
+    exit 1
+}
+
 # Commit and get it to origin. The credential helper lives in this clone's
 # .git/config and is never printed; nothing about it reaches these transcripts.
 #
