@@ -17,5 +17,5 @@ metadata:
     app.kubernetes.io/name: web
     app.kubernetes.io/part-of: cse644-assignment-03
 data:
-  APP_MESSAGE: "Customized Nginx, deployed from Git by Argo CD."
+  APP_MESSAGE: "Customized Nginx, reconciled from Git by Argo CD (config revision 2)."
   APP_ENV: "development"
