@@ -13,10 +13,11 @@ kubeconfig
 *.pfx
 **/secrets/
 
-# Secret manifests, with one deliberate exception: the template that carries a
-# placeholder and documents why the real value is created outside Git.
+# Secret manifests. The one template in this repository is deliberately named
+# k8s/21-api-secret.yaml.example - it does not end in .yaml, so it is neither
+# ignored by the rule below nor read by Argo CD, which parses only *.yaml,
+# *.yml and *.json in a synced directory.
 *secret*.yaml
-!k8s/21-api-secret.example.yaml
 
 # OS / editor noise
 .DS_Store

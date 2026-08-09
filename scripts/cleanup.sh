@@ -48,7 +48,24 @@ done
 step "Remove the AppProject and the Argo CD ingress"
 note "Both were applied by hand during bootstrap, so neither is owned by an"
 note "Application and neither is removed by the cascade."
-run "kargo delete appproject cse644 --ignore-not-found"
+note "Order matters, and getting it wrong deadlocks the cluster. An Application"
+note "carrying the resources-finalizer cannot finish deleting unless the"
+note "controller can still resolve its AppProject; delete the project first and"
+note "the Application hangs in Terminating forever, the project hangs on its own"
+note "finalizer waiting for the Application, and the only way out is to patch"
+note "the finalizers off both by hand. Hence the wait loop above, and the guard"
+note "below: the project is only removed once every Application is actually"
+note "gone."
+LEFT=$(kargo get applications --no-headers 2>/dev/null | wc -l)
+if [ "$LEFT" = "0" ]; then
+    run "kargo delete appproject cse644 --ignore-not-found"
+else
+    echo
+    echo "[refusing to delete the AppProject: ${LEFT} Application(s) still present]"
+    run "kargo get applications"
+    note "Deleting the project now would strand them. Re-run this script once"
+    note "they have finished terminating."
+fi
 run "kargo delete ingress argocd-server --ignore-not-found"
 
 if $REMOVE_ARGOCD; then
