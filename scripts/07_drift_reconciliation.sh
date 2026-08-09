@@ -35,6 +35,20 @@ commit_push "Disable selfHeal on the platform Application to demonstrate drift d
 wait_revision cse644-root "$HEAD_SHA" 90
 run "kargo get application cse644-platform -o jsonpath='{.spec.syncPolicy.automated}'; echo"
 
+note "selfHeal is off - but that is not yet enough to introduce drift safely."
+note "This commit changed main, and the platform Application tracks main too."
+note "A new revision is a change in *desired* state, which an automated sync"
+note "acts on whether or not selfHeal is set: selfHeal governs drift in the"
+note "live cluster, not new commits. So there is a sync still pending, and it"
+note "will apply the whole of k8s/ when it runs - erasing any drift introduced"
+note "before it lands. An earlier run of this script scaled the Deployment down"
+note "four seconds after the commit and watched it bounce straight back to"
+note "three, which looks exactly like selfHeal working and is not."
+stamp "waiting for the pending sync to land before touching the cluster"
+wait_revision cse644-platform "$HEAD_SHA" 90
+wait_app cse644-platform Synced Healthy 90
+stamp "platform is Synced at ${HEAD_SHA:0:8}; nothing is pending"
+
 # ===========================================================================
 step "PART 2 - change the live cluster directly, behind Git's back"
 # ===========================================================================
@@ -86,15 +100,15 @@ step "PART 5 - the same drift, with selfHeal on"
 stamp "introducing the same drift again"
 kn scale deployment/web --replicas=1 >/dev/null
 echo "\$ kubectl -n ${NS} scale deployment/web --replicas=1"
-START=$(date +%s)
-for i in $(seq 1 60); do
+START=$(date +%s%N)
+for i in $(seq 1 300); do
     R=$(kn get deploy web -o jsonpath='{.spec.replicas}')
-    stamp "spec.replicas=${R}"
     [ "$R" = "3" ] && break
-    sleep 2
+    sleep 0.5
 done
-END=$(date +%s)
-note "Reverted after $((END - START)) seconds, with nobody watching."
+END=$(date +%s%N)
+note "Reverted after $(( (END - START) / 1000000 )) ms, with nobody watching."
+run "kn get deploy web -o jsonpath='{.spec.replicas}'; echo '   <- back to the value in Git'"
 run "kn get deploy web -o custom-columns='DEPLOY:.metadata.name,REPLICAS:.spec.replicas,READY:.status.readyReplicas'"
 run "kargo get application cse644-platform -o jsonpath='{.status.sync.status}'; echo"
 
@@ -105,13 +119,13 @@ note "The strongest form of drift: the object is gone, not merely different."
 stamp "deleting the entire web Deployment"
 run "kn delete deployment web"
 run "kn get deploy 2>&1 | head -5"
-START=$(date +%s)
-for i in $(seq 1 90); do
+START=$(date +%s%N)
+for i in $(seq 1 600); do
     if kn get deploy web >/dev/null 2>&1; then break; fi
-    sleep 2
+    sleep 0.2
 done
-END=$(date +%s)
-stamp "the Deployment came back after $((END - START)) seconds"
+END=$(date +%s%N)
+stamp "the Deployment came back after $(( (END - START) / 1000000 )) ms"
 run "kn rollout status deploy/web --timeout=180s"
 run "kn get deploy,pod -l app.kubernetes.io/name=web"
 run "ing ${WEB_HOST} ${INGRESS}/message"
