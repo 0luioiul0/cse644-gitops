@@ -1,4 +1,4 @@
-# The application platform: everything under k8s/.
+﻿# The application platform: everything under k8s/.
 #
 # syncPolicy.automated is what makes this GitOps rather than "a YAML directory
 # somebody occasionally applies". The three settings do different jobs and the
@@ -44,7 +44,7 @@ spec:
   syncPolicy:
     automated:
       prune: true
-      selfHeal: false
+      selfHeal: true
     syncOptions:
       - ServerSideApply=true
       # The namespace is a manifest in k8s/, so Argo CD must not invent one.

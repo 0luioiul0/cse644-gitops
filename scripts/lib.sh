@@ -206,32 +206,42 @@ wait_remote() {
     return 1
 }
 
-# Wait until the Application has *finished a sync operation* for a revision,
-# rather than merely reporting that revision as its current one.
+# Wait until the controller has gone quiet about an Application: Synced, with
+# no sync operation running, continuously for `need` seconds.
 #
-# These are two different facts and the difference is a race that produces
-# confident, wrong demonstrations. `.status.sync` is written by the comparison
-# loop: it says "live matches revision X" the moment the comparison says so.
-# `.status.operationState` is written by the syncing machinery: it says "the
-# apply for revision X ran and finished". A new commit makes the app report
-# Synced at X while the automated sync for X is still queued, and that queued
-# sync applies *every* manifest when it runs. Drift introduced in that window
-# is erased by it, which is indistinguishable from selfHeal if all you check
-# is the sync status - scripts/07 asserted exactly that until this existed.
-wait_sync_operation() {
-    local app="$1" sha="$2" tries="${3:-90}"
+# This exists because of a race that produces confident, wrong demonstrations.
+# `selfHeal: false` stops Argo CD reverting drift in the live cluster, but it
+# does not stop an automated sync triggered by a *new revision* - and such a
+# sync applies every manifest in the directory, so it reverts drift too. The
+# window is easy to land in: any commit to the tracked branch starts it, even
+# a commit that changes nothing the Application reads.
+#
+# Waiting for the Application to report the new revision is not enough, because
+# `.status.sync` is written by the comparison loop and moves as soon as the
+# comparison says live matches. Waiting for a completed sync *operation* is not
+# enough either, and is worse - it can hang forever, because a commit that does
+# not touch the synced path produces no operation at all to wait for.
+#
+# What actually matters is that the controller has finished reacting to the new
+# revision, so a later divergence is judged on its own. Quiescence is the
+# honest test for that.
+wait_quiescent() {
+    local app="$1" need="${2:-15}" tries="${3:-180}"
+    local stable=0
     for _ in $(seq "$tries"); do
-        local phase rev sync
-        phase=$(kargo get application "$app" -o jsonpath='{.status.operationState.phase}' 2>/dev/null)
-        rev=$(kargo get application "$app" -o jsonpath='{.status.operationState.syncResult.revision}' 2>/dev/null)
+        local sync phase
         sync=$(kargo get application "$app" -o jsonpath='{.status.sync.status}' 2>/dev/null)
-        if [ "$phase" = "Succeeded" ] && [ "${rev:0:8}" = "${sha:0:8}" ] && [ "$sync" = "Synced" ]; then
-            return 0
+        phase=$(kargo get application "$app" -o jsonpath='{.status.operationState.phase}' 2>/dev/null)
+        if [ "$sync" = "Synced" ] && [ "$phase" != "Running" ]; then
+            stable=$((stable + 1))
+        else
+            stable=0
         fi
-        sleep 2
+        [ "$stable" -ge "$need" ] && return 0
+        sleep 1
     done
     echo
-    echo "[FATAL] ${app} never completed a sync operation for ${sha:0:8}."
+    echo "[FATAL] ${app} never stayed Synced and idle for ${need}s."
     finish
     exit 1
 }
