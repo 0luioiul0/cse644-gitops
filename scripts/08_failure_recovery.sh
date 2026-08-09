@@ -67,8 +67,9 @@ run "kn get rs -o custom-columns='REPLICASET:.metadata.name,IMAGE:.spec.template
 run "kn get events --sort-by=.lastTimestamp | grep -i -e pull -e fail | tail -12"
 BAD_POD=$(kn get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.containerStatuses[0].state.waiting.reason}{"\n"}{end}' 2>/dev/null | grep -E 'ImagePullBackOff|ErrImagePull' | head -1 | cut -d' ' -f1)
 run "kn describe pod ${BAD_POD} | sed -n '/Events:/,\$p'"
-note "'manifest unknown' from the registry. Not a network problem, not a"
-note "permission problem - the tag was never pushed."
+note "The registry answered, and its answer was 'not found': containerd could"
+note "not resolve the reference. Not a network failure and not a credential"
+note "failure, either of which would say so - the tag was simply never pushed."
 
 step "DIAGNOSIS 3 - who is actually down"
 run "ing ${WEB_HOST} -o /dev/null -w 'web  -> HTTP %{http_code}\n' ${INGRESS}/"
@@ -76,9 +77,13 @@ run "ing ${API_HOST} -o /dev/null -w 'api  -> HTTP %{http_code}\n' ${INGRESS}/ap
 run "ing ${WEB_HOST} ${INGRESS}/version"
 note "web answers, from the previous image. maxUnavailable: 0 refused to"
 note "remove a working replica for one that never became ready."
-run "kn get endpoints api-clusterip -o yaml | grep -A3 -e 'subsets' -e 'notReadyAddresses' | head -12"
-note "api has no ready endpoint, so the ingress controller has nothing to send"
-note "the request to and returns 503. Recreate deleted the working Pod first."
+note "The 503 comes from the ingress controller, not from the application -"
+note "there is no application left to answer. An EndpointSlice is how the"
+note "controller learns where to send a request, and api's is now empty:"
+run "kn get endpointslice -l kubernetes.io/service-name=api-clusterip -o custom-columns='SLICE:.metadata.name,ADDRESSES:.endpoints[*].addresses,READY:.endpoints[*].conditions.ready'"
+run "kn get endpointslice -l kubernetes.io/service-name=web-clusterip -o custom-columns='SLICE:.metadata.name,ADDRESSES:.endpoints[*].addresses,READY:.endpoints[*].conditions.ready'"
+note "web still has three ready addresses; api has none. Recreate deleted the"
+note "working Pod before discovering the replacement could not start."
 
 step "DIAGNOSIS 4 - the Deployment gives up"
 note "progressDeadlineSeconds is 180 in these manifests rather than the 600s"
