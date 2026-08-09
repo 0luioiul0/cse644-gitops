@@ -25,6 +25,10 @@ What each metric is for
                                      state: how many notes are on the
                                      PersistentVolume. It survives a Pod
                                      replacement, and the graph shows that.
+  cse644_api_notes_bytes             added in 1.1.0. How much of the claim is
+                                     used. A record count cannot answer "when
+                                     does this volume fill up"; bytes against a
+                                     fixed PVC size can.
   cse644_api_healthy                 what the liveness endpoint would answer.
   cse644_api_build_info              the running version, as a label. Lets a
                                      deployment be located on a graph.
@@ -137,7 +141,9 @@ def _escape(value):
 def render_metrics():
     """Prometheus text exposition format, version 0.0.4."""
     out = []
-    now_notes = storage_status().get("note_count", 0)
+    _storage = storage_status()
+    now_notes = _storage.get("note_count", 0)
+    now_bytes = _storage.get("bytes", 0)
 
     with _LOCK:
         requests = dict(_REQUESTS)
@@ -179,6 +185,14 @@ def render_metrics():
     out.append("# HELP cse644_api_notes_stored Notes currently on the persistent volume.")
     out.append("# TYPE cse644_api_notes_stored gauge")
     out.append("cse644_api_notes_stored %d" % now_notes)
+
+    # Added in 1.1.0. A count of records says nothing about how fast a volume
+    # is filling; bytes do, and a PersistentVolumeClaim is a fixed size. This
+    # is the metric that answers "when does this run out of disk", which the
+    # note count cannot.
+    out.append("# HELP cse644_api_notes_bytes Size in bytes of the notes file on the persistent volume.")
+    out.append("# TYPE cse644_api_notes_bytes gauge")
+    out.append("cse644_api_notes_bytes %d" % now_bytes)
 
     out.append("# HELP cse644_api_healthy 1 if the liveness endpoint reports healthy, 0 otherwise.")
     out.append("# TYPE cse644_api_healthy gauge")
@@ -230,10 +244,11 @@ def storage_status():
             "writable": os.access(DATA_DIR, os.W_OK),
             "notes": lines,
             "note_count": len(lines),
+            "bytes": os.path.getsize(NOTES) if os.path.exists(NOTES) else 0,
             "capacity_mb": round(st.f_blocks * st.f_frsize / 1e6, 1),
         }
     except OSError as exc:
-        return {"dir": DATA_DIR, "error": str(exc), "note_count": 0}
+        return {"dir": DATA_DIR, "error": str(exc), "note_count": 0, "bytes": 0}
 
 
 PAGE = """<!doctype html>
