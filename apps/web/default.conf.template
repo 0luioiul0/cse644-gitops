@@ -1,0 +1,68 @@
+# Rendered at container start by the stock nginx entrypoint script
+# /docker-entrypoint.d/20-envsubst-on-templates.sh, which runs envsubst over
+# every *.template in /etc/nginx/templates.
+#
+# That is what lets a ConfigMap change what this workload says without
+# rebuilding the image: the values below arrive as environment variables, and
+# sub_filter injects them into the static page on the way out. In this
+# assignment the ConfigMap itself is declared in Git, so the chain is
+# git push -> Argo CD -> ConfigMap -> environment -> this file -> the page.
+
+server {
+    listen       80;
+    server_name  _;
+
+    root  /usr/share/nginx/html;
+    index index.html;
+
+    # Identify the Pod that served the response - the evidence that a Service
+    # is balancing across several replicas.
+    add_header X-Pod-Name    "${POD_NAME}"    always;
+    add_header X-Node-Name   "${NODE_NAME}"   always;
+    add_header X-App-Env     "${APP_ENV}"     always;
+    add_header X-App-Version "${APP_VERSION}" always;
+
+    location / {
+        sub_filter '__APP_MESSAGE__' '${APP_MESSAGE}';
+        sub_filter '__APP_ENV__'     '${APP_ENV}';
+        sub_filter '__APP_VERSION__' '${APP_VERSION}';
+        sub_filter '__POD_NAME__'    '${POD_NAME}';
+        sub_filter '__NODE_NAME__'   '${NODE_NAME}';
+        sub_filter_once off;
+        sub_filter_types text/html;
+        try_files $uri $uri/ =404;
+    }
+
+    # Plain-text endpoints used by the load-balancing and probe evidence.
+    location /whoami {
+        default_type text/plain;
+        return 200 "${POD_NAME}\n";
+    }
+
+    location /message {
+        default_type text/plain;
+        return 200 "${APP_MESSAGE}\n";
+    }
+
+    # Used by the GitOps evidence: one curl proves which build is live.
+    location /version {
+        default_type text/plain;
+        return 200 "${APP_VERSION}\n";
+    }
+
+    # Liveness: the process is up and serving.
+    location /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Readiness: this workload has no warm-up, so it reports ready as soon as
+    # nginx answers. Kept as a separate endpoint so the two probes stay
+    # independently meaningful.
+    location /readyz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ready\n";
+    }
+}

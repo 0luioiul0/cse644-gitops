@@ -1,0 +1,65 @@
+# The root of the "app of apps" tree.
+#
+# The root Application's source is not a directory of workloads - it is
+# gitops/apps/, the directory that declares the AppProject and the two child
+# Applications. So the answer to "what is deployed on this cluster, and with
+# what sync policy" is a file in Git, reviewable in a pull request, rather than
+# a command somebody ran once.
+#
+# Bootstrapping needs exactly two `kubectl apply` calls, and only ever these
+# two: gitops/apps/00-project.yaml first, then this file. The order is not
+# arbitrary - Argo CD refuses to admit an Application whose project does not
+# exist, and the project is declared inside the very directory this
+# Application syncs. Applying the project by hand breaks that circle; the copy
+# in gitops/apps/ then becomes the managed one, and any later edit to it
+# arrives through Git like everything else.
+#
+# Two consequences worth stating, because they are easy to miss:
+#
+#   * Turning selfHeal off for the platform Application means editing
+#     gitops/apps/10-platform.yaml and pushing - not running `argocd app set`.
+#     A change made with the CLI would itself be drift, and the root
+#     Application would revert it. The GitOps loop applies to the GitOps
+#     configuration too. scripts/06_drift_reconciliation.sh relies on this.
+#
+#   * After the two bootstrap applies, nothing else is ever applied by hand.
+#     Every later change, including changes to this file's own children,
+#     arrives through Git.
+#
+#   kubectl apply -f gitops/apps/00-project.yaml
+#   kubectl apply -f gitops/bootstrap/02-root-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cse644-root
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: cse644-assignment-03
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: cse644
+
+  source:
+    repoURL: https://github.com/0luioiul0/cse644-gitops.git
+    targetRevision: main
+    path: gitops/apps
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  revisionHistoryLimit: 5

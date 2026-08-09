@@ -1,0 +1,419 @@
+# The dashboard, as JSON, in Git.
+#
+# Panel order follows the order the questions get asked during an incident:
+# what is running, how much traffic, how much of it is failing, how slow is it,
+# is work queueing, is the application's own state intact, what does the edge
+# see, is the GitOps controller in sync, and only last - is the container
+# short of CPU or memory. Infrastructure panels are at the bottom because they
+# are the least often the answer.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-cse644
+  namespace: cse644-monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: cse644-assignment-03
+data:
+  cse644-gitops.json: |
+    {
+      "uid": "cse644-gitops",
+      "title": "CSE644 - GitOps application overview",
+      "description": "Application, edge and GitOps-controller metrics for the CSE644 Assignment 03 platform.",
+      "tags": ["cse644", "gitops"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": false,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "templating": { "list": [] },
+      "annotations": { "list": [] },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Running api version",
+          "description": "Read from cse644_api_build_info, which the application derives from the image it was built as - so this cannot disagree with what is actually running.",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "cse644_api_build_info",
+              "legendFormat": "{{version}}",
+              "instant": true
+            }
+          ],
+          "options": {
+            "textMode": "name",
+            "graphMode": "none",
+            "colorMode": "background",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } },
+            "overrides": []
+          }
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Request rate",
+          "description": "All routes, including the probes and the Prometheus scrape - which is why this never reads zero.",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "sum(rate(cse644_api_requests_total[5m]))",
+              "legendFormat": "req/s"
+            }
+          ],
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "blue" } },
+            "overrides": []
+          }
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "5xx ratio",
+          "description": "Server errors as a fraction of all requests. clamp_min on the denominator keeps the panel blank rather than NaN when there is no traffic at all.",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "sum(rate(cse644_api_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(cse644_api_requests_total[5m])), 0.001)",
+              "legendFormat": "5xx"
+            }
+          ],
+          "options": {
+            "graphMode": "area",
+            "colorMode": "background",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "orange", "value": 0.01 },
+                  { "color": "red", "value": 0.05 }
+                ]
+              },
+              "color": { "mode": "thresholds" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Notes on the PersistentVolume",
+          "description": "Application state, not infrastructure state. This number is expected to hold across a Pod replacement - if it ever drops to zero, the volume was lost.",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "max(cse644_api_notes_stored)",
+              "legendFormat": "notes"
+            }
+          ],
+          "options": {
+            "graphMode": "area",
+            "colorMode": "value",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "purple" } },
+            "overrides": []
+          }
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "api request rate by route",
+          "description": "Routes are a bounded label set - anything unrecognised is folded into \"other\" by the application, so a scanner cannot create unbounded cardinality here.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "sum by (route) (rate(cse644_api_requests_total[1m]))",
+              "legendFormat": "{{route}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "api latency quantiles (all routes)",
+          "description": "Computed at query time from histogram buckets. A pre-averaged mean would hide exactly the tail that /api/work is generating.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "p50"
+            },
+            {
+              "refId": "B",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "histogram_quantile(0.90, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "p90"
+            },
+            {
+              "refId": "C",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom" },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "api responses by status",
+          "description": "404s come from the load generator asking for a path that does not exist; 500s come from /api/boom. Both are deliberate, so the panel has something to show.",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "sum by (status) (rate(cse644_api_requests_total[1m]))",
+              "legendFormat": "{{status}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "stacking": { "mode": "normal" }, "showPoints": "never" }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "500" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+              { "matcher": { "id": "byName", "options": "404" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] },
+              { "matcher": { "id": "byName", "options": "200" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] }
+            ]
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom" },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "api requests in flight",
+          "description": "Concurrency. Rises when requests queue behind slow work - the signal an averaged latency figure flattens away.",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "cse644_api_requests_in_flight",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          }
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "notes stored (application state)",
+          "description": "Plotted over time so a Pod replacement is visibly a flat line rather than a reset.",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "cse644_api_notes_stored",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          }
+        },
+        {
+          "id": 10,
+          "type": "timeseries",
+          "title": "ingress requests by host",
+          "description": "Measured at the ingress controller, so the web workload is covered without an exporter sidecar per replica. web.gitops.local is the nginx application; api.gitops.local is the Python one.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "sum by (host) (rate(nginx_ingress_controller_requests{namespace=~\"cse644.*\"}[1m]))",
+              "legendFormat": "{{host}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "id": 11,
+          "type": "timeseries",
+          "title": "Argo CD applications by sync status",
+          "description": "The GitOps controller measuring itself. During the drift demonstration this line moves to OutOfSync and back, which turns \"how long was the cluster wrong\" into a number.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "sum by (sync_status) (argocd_app_info)",
+              "legendFormat": "{{sync_status}}"
+            },
+            {
+              "refId": "B",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "sum by (health_status) (argocd_app_info)",
+              "legendFormat": "health: {{health_status}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "OutOfSync" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] },
+              { "matcher": { "id": "byName", "options": "Synced" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] }
+            ]
+          },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull"] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "id": 12,
+          "type": "timeseries",
+          "title": "container CPU (cse644-gitops namespace)",
+          "description": "From the kubelet's cAdvisor endpoint. /api/cpu is what makes this move on demand.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"cse644-gitops\"}[2m]))",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 3,
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "id": 13,
+          "type": "timeseries",
+          "title": "container memory working set (cse644-gitops namespace)",
+          "description": "Working set, not RSS: this is the number the kubelet compares against the memory limit when deciding what to evict.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "cse644-prometheus" },
+              "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"cse644-gitops\"})",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        }
+      ]
+    }

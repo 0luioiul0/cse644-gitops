@@ -1,0 +1,126 @@
+# The instrumented port 8888 application.
+#
+# Single replica with the Recreate strategy: the PersistentVolumeClaim is
+# ReadWriteOnce on a node-local StorageClass, so two Pods cannot hold it at
+# once and the old Pod must terminate before the new one starts.
+#
+# That makes this workload the one with no rollout safety net. When
+# scripts/07_failure_recovery.sh commits an image tag that does not exist, the
+# old Pod is already gone by the time the kubelet discovers it cannot pull the
+# new one, and the application is genuinely down until Git is corrected. The
+# web Deployment, rolling with maxUnavailable: 0, survives the same commit
+# untouched. Neither behaviour is a bug; the difference is the trade-off
+# between a volume you can only mount once and an application you can never
+# take offline.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: cse644-gitops
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: cse644-assignment-03
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+      app.kubernetes.io/component: backend
+  strategy:
+    type: Recreate
+  # See 11-web-deployment.yaml: three minutes rather than the 600s default, so
+  # a rollout that cannot finish is reported as Degraded rather than sitting
+  # silently in Progressing.
+  progressDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: cse644-assignment-03
+      annotations:
+        # Bumped by hand whenever api-config changes - same reasoning as the
+        # web Deployment: envFrom is read once, at container start.
+        cse644.dev/config-revision: "1"
+        # How Prometheus finds this workload. The scrape config discovers every
+        # Pod in the cluster through the Kubernetes API and keeps the ones
+        # carrying this annotation, so adding a new instrumented workload to
+        # the platform needs no change to the Prometheus configuration at all -
+        # see monitoring/11-prometheus-config.yaml.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8888"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        # Makes the mounted volume group-owned by the app's gid, so the
+        # unprivileged process can write to it.
+        fsGroup: 10001
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: api-data
+      containers:
+        - name: api
+          image: docker.io/luioiul/cse644-gitops-api:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8888
+          envFrom:
+            - configMapRef:
+                name: api-config
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # The Secret is injected as an environment variable. The
+            # application never logs or renders it - only a truncated SHA-256
+            # fingerprint. It is created outside Git; see
+            # 21-api-secret.example.yaml for why.
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: api-secret
+                  key: API_KEY
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              # No CPU limit on purpose. /api/cpu exists to make the container
+              # CPU graph move; a limit would flatten it into throttling, which
+              # is a different lesson than the one this dashboard is for.
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

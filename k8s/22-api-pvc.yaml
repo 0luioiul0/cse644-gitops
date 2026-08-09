@@ -1,0 +1,27 @@
+# Persistent storage for the port 8888 application.
+#
+# The claim is a separate object from the Deployment, which is the point:
+# replacing the workload does not touch the claim, so notes written by one Pod
+# are still there for its replacement. The `cse644_api_notes_stored` metric
+# plots exactly this, so the Grafana dashboard shows the count holding steady
+# across a rollout instead of resetting - application state surviving an
+# infrastructure event, visible on a graph.
+#
+# `standard` is the StorageClass KinD installs by default (rancher local-path
+# provisioner). It is ReadWriteOnce and node-local, which is why the api
+# Deployment runs a single replica with the Recreate strategy.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: api-data
+  namespace: cse644-gitops
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: cse644-assignment-03
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 256Mi

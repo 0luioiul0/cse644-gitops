@@ -1,0 +1,21 @@
+# Non-secret configuration for the web workload.
+#
+# This file is the target of the Git-driven change demonstration
+# (scripts/05_git_driven_change.sh): editing APP_MESSAGE here, committing and
+# pushing is the whole deployment procedure. Nothing is applied by hand.
+#
+# A ConfigMap consumed through `envFrom` is read once, at container start, so a
+# change to it does not reach a running Pod on its own. Argo CD does not roll
+# Deployments on ConfigMap changes either. That is what the checksum annotation
+# on the web Deployment is for - see 11-web-deployment.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+  namespace: cse644-gitops
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: cse644-assignment-03
+data:
+  APP_MESSAGE: "Customized Nginx, deployed from Git by Argo CD."
+  APP_ENV: "development"

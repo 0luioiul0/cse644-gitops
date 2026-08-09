@@ -1,0 +1,42 @@
+# One entry point, two applications, routed by Host header.
+#
+# The cluster's ingress-nginx controller is shared infrastructure installed for
+# Assignment 02; it is not part of this repository and not managed by Argo CD.
+# Host port 8090 on the machine is mapped to it by kind/cluster.yaml.
+#
+# Reach either application with:
+#   curl -H 'Host: web.gitops.local' http://localhost:8090/
+#   curl -H 'Host: api.gitops.local' http://localhost:8090/api/info
+#
+# Distinct host names from Assignment 02's web.cse644.local / api.cse644.local,
+# so both assignments can be served by the same controller at the same time.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cse644-gitops
+  namespace: cse644-gitops
+  labels:
+    app.kubernetes.io/part-of: cse644-assignment-03
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: web.gitops.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-clusterip
+                port:
+                  name: http
+    - host: api.gitops.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-clusterip
+                port:
+                  name: http

@@ -1,0 +1,51 @@
+# An AppProject is a boundary, not a folder.
+#
+# The default project Argo CD ships with permits any repository, any cluster,
+# any namespace and any resource kind. That is fine for a first look and wrong
+# for anything else: it means a mistake in a manifest - or a commit to the
+# wrong repository - can create objects anywhere in the cluster.
+#
+# This project says exactly what this assignment is allowed to do:
+#   * one source repository, and no other;
+#   * three namespaces on the local cluster, and no others;
+#   * three cluster-scoped kinds, all of which appear in monitoring/ and are
+#     needed for Prometheus discovery. Anything else cluster-scoped - a
+#     ValidatingWebhookConfiguration, a CustomResourceDefinition, a
+#     ClusterRoleBinding to cluster-admin - is refused at sync time.
+#
+# The `cse644` namespace belonging to Assignment 02 is deliberately absent, so
+# this project cannot touch the other assignment's workloads even by accident.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: cse644
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: cse644-assignment-03
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: CSE644 Assignment 03 - GitOps-managed application platform and monitoring
+
+  sourceRepos:
+    - https://github.com/0luioiul0/cse644-gitops.git
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: cse644-gitops
+    - server: https://kubernetes.default.svc
+      namespace: cse644-monitoring
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

@@ -1,0 +1,24 @@
+# ClusterIP Service for the web workload.
+#
+# Assignment 02 put four Services in front of these same Pods to compare the
+# exposure mechanisms. That comparison is done; this assignment keeps the one
+# that the Ingress needs and drops the rest, because every object declared here
+# is an object Argo CD has to keep reconciled, and unused objects make the
+# diff harder to read rather than easier.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-clusterip
+  namespace: cse644-gitops
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: cse644-assignment-03
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/component: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

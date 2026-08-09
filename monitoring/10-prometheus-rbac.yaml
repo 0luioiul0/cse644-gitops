@@ -1,0 +1,63 @@
+# Prometheus discovers what to scrape by asking the Kubernetes API, so it needs
+# read access to the objects it discovers from. Every verb here is read-only,
+# and the list is the smallest one that makes the four scrape jobs in
+# 11-prometheus-config.yaml work:
+#
+#   pods                 the annotation-based discovery of application targets
+#   nodes, nodes/proxy   the kubelet cAdvisor endpoint, reached through the API
+#                        server's proxy subresource rather than by dialling the
+#                        kubelet port directly - which means no extra
+#                        certificates and no host networking
+#   services, endpoints  discovery by Service, kept because it costs nothing and
+#                        is the first thing anyone adds next
+#
+# A ClusterRole rather than a Role because discovery is cluster-wide: the
+# ingress controller Prometheus scrapes lives in ingress-nginx, and Argo CD
+# lives in argocd.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: cse644-monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: cse644-assignment-03
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cse644-gitops-prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: cse644-assignment-03
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/proxy
+      - nodes/metrics
+      - services
+      - endpoints
+      - pods
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cse644-gitops-prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: cse644-assignment-03
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cse644-gitops-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: cse644-monitoring

@@ -1,0 +1,120 @@
+# The customized web workload, three replicas.
+#
+# Rollout strategy matters for one of this assignment's demonstrations. With
+# `maxUnavailable: 0` a new ReplicaSet must produce a *ready* Pod before an old
+# one is removed, so a bad image committed to Git leaves this Deployment stuck
+# Progressing while the previous replicas keep serving. The api Deployment next
+# door uses `Recreate` and does go down. Same broken commit, two different
+# outcomes - see scripts/07_failure_recovery.sh.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: cse644-gitops
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: cse644-assignment-03
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+      app.kubernetes.io/component: frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  # Three minutes, not the 600s default. This is what decides how long a stuck
+  # rollout stays "Progressing" before Kubernetes marks it
+  # ProgressDeadlineExceeded and Argo CD reports the application Degraded. Ten
+  # minutes of silence is too long to notice a bad deploy, here or in
+  # production; three is short enough to be useful and long enough that a slow
+  # image pull on a cold node does not trip it.
+  progressDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: cse644-assignment-03
+      annotations:
+        # Bumped by hand whenever web-config changes.
+        #
+        # A ConfigMap consumed through envFrom is read once at container start.
+        # Argo CD will happily sync a changed ConfigMap and report the
+        # application Synced and Healthy while every running Pod still holds
+        # the old value - the cluster matches Git, but the *behaviour* has not
+        # changed. Changing this annotation changes the Pod template, which is
+        # what actually triggers the rolling update.
+        #
+        # scripts/05_git_driven_change.sh demonstrates both halves: one commit
+        # that edits only the ConfigMap and visibly does nothing, then one that
+        # bumps this value and rolls the fleet.
+        cse644.dev/config-revision: "1"
+    spec:
+      # Spread replicas over nodes where possible, so "multiple running
+      # instances" is not three Pods on one machine.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: web
+              app.kubernetes.io/component: frontend
+      containers:
+        - name: web
+          # Pinned tag in a public registry. Assignment 02 side-loaded images
+          # with `kind load` because they existed nowhere else; that cannot
+          # work here, because the whole point is that the cluster's state is
+          # derived from Git and a registry, not from what happens to be in a
+          # local Docker daemon.
+          image: docker.io/luioiul/cse644-gitops-web:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          envFrom:
+            - configMapRef:
+                name: web-config
+          env:
+            # Downward API: lets the page and the response headers name the
+            # exact replica and node that answered.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "NET_BIND_SERVICE"]

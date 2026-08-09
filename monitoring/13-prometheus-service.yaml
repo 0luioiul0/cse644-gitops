@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: cse644-monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: cse644-assignment-03
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+# Exposed read-only through the shared ingress controller so the evidence can
+# be captured with curl and a browser rather than a port-forward that only
+# exists while a terminal is open.
+#
+#   curl -H 'Host: prometheus.gitops.local' http://localhost:8090/api/v1/targets
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prometheus
+  namespace: cse644-monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: cse644-assignment-03
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: prometheus.gitops.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prometheus
+                port:
+                  name: http

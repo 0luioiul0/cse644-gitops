@@ -1,0 +1,7 @@
+# Scripts and manifests are consumed by bash and by Linux containers, and this
+# repository is read directly by Argo CD's repo-server. Force LF so a clone on
+# Windows does not produce CRLF files that break shebangs or YAML parsing.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary

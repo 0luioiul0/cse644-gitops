@@ -1,0 +1,13 @@
+# Monitoring lives in its own namespace and its own Argo CD Application.
+#
+# Splitting it from the application Application is not cosmetic: it means the
+# observability stack can be synced, broken, or rolled back without touching
+# the workload it is watching. A monitoring change that takes Prometheus down
+# should never be able to take the application down with it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cse644-monitoring
+  labels:
+    app.kubernetes.io/part-of: cse644-assignment-03
+    course: cse644

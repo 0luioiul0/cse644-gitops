@@ -1,0 +1,59 @@
+# The application platform: everything under k8s/.
+#
+# syncPolicy.automated is what makes this GitOps rather than "a YAML directory
+# somebody occasionally applies". The three settings do different jobs and the
+# distinction matters for the demonstrations:
+#
+#   automated   a commit to main is applied without anyone running a command.
+#   prune       an object deleted from Git is deleted from the cluster. Without
+#               it, removing a manifest leaves the object running forever and
+#               Git stops being a complete description of the cluster.
+#   selfHeal    a change made *to the cluster* is reverted back to Git. This is
+#               the setting scripts/06_drift_reconciliation.sh turns off and on
+#               through Git, to show the difference between "Argo CD noticed"
+#               and "Argo CD corrected".
+#
+# ServerSideApply is on because these manifests carry long comment blocks; the
+# client-side last-applied-configuration annotation has a 256KB ceiling and,
+# more usefully, server-side apply reports field-level conflicts instead of
+# silently overwriting another controller's field.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cse644-platform
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: cse644-assignment-03
+  finalizers:
+    # Makes `argocd app delete` cascade: the application's objects are removed
+    # before the Application resource itself disappears. Without this,
+    # deleting the Application orphans everything it created.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: cse644
+
+  source:
+    repoURL: https://github.com/0luioiul0/cse644-gitops.git
+    targetRevision: main
+    path: k8s
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cse644-gitops
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      # The namespace is a manifest in k8s/, so Argo CD must not invent one.
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  revisionHistoryLimit: 5

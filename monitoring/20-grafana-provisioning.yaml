@@ -1,0 +1,44 @@
+# Grafana is provisioned entirely from files, never from its UI.
+#
+# A dashboard built by clicking lives in Grafana's SQLite database, which here
+# is an emptyDir - one Pod restart and it is gone, and nothing in Git ever knew
+# it existed. Provisioned from a ConfigMap, the dashboard is part of the
+# desired state like every other object: Argo CD applies it, a change to it is
+# reviewable as a diff, and a fresh cluster comes up with it already there.
+#
+# `allowUiUpdates: false` makes that explicit rather than implicit - edits in
+# the browser cannot be saved, so nobody is misled into thinking they were.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: cse644-monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: cse644-assignment-03
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: cse644-prometheus
+        access: proxy
+        url: http://prometheus.cse644-monitoring.svc.cluster.local:9090
+        isDefault: true
+        jsonData:
+          # Matches the scrape_interval, so Grafana's automatic step choice
+          # never asks for a finer resolution than the data actually has.
+          timeInterval: 15s
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: cse644
+        orgId: 1
+        folder: CSE644
+        type: file
+        disableDeletion: true
+        allowUiUpdates: false
+        updateIntervalSeconds: 20
+        options:
+          path: /var/lib/grafana/dashboards

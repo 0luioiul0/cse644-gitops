@@ -1,0 +1,42 @@
+# The observability stack: everything under monitoring/.
+#
+# A separate Application from the platform so the two can fail independently.
+# If a bad Prometheus scrape configuration is committed, this Application goes
+# Degraded and the application it is watching keeps serving - which is the
+# correct blast radius for a monitoring change.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cse644-monitoring
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: cse644-assignment-03
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: cse644
+
+  source:
+    repoURL: https://github.com/0luioiul0/cse644-gitops.git
+    targetRevision: main
+    path: monitoring
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cse644-monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  revisionHistoryLimit: 5

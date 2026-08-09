@@ -1,0 +1,188 @@
+# Prometheus scrape configuration.
+#
+# Four jobs, each answering a different question:
+#
+#   kubernetes-pods   the application's own metrics. Targets are discovered by
+#                     annotation, not listed by hand, so a new instrumented
+#                     workload joins monitoring by adding three lines to its
+#                     Pod template - no change here, no Prometheus restart.
+#   ingress-nginx     HTTP traffic as the edge sees it: rate, status and
+#                     latency per Ingress host. This is why the web workload
+#                     carries no /metrics endpoint of its own. Instrumenting
+#                     nginx would mean an exporter sidecar per Pod measuring
+#                     one replica each; the controller already measures every
+#                     request that entered the cluster, labelled by host and
+#                     path, for free.
+#   kubelet-cadvisor  container CPU and memory, from the kubelet, reached
+#                     through the API server proxy. Answers "is the workload
+#                     resource-starved" - a question application metrics cannot.
+#   argocd            the GitOps controller itself. argocd_app_info carries a
+#                     sync_status label, so "how long did the cluster sit
+#                     OutOfSync" becomes a graph rather than a screenshot.
+#
+# Storage is a 2Gi PVC with 12h retention - enough to keep a demonstration's
+# history across a Pod restart, small enough for a laptop cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: cse644-monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: cse644-assignment-03
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: kind-cse644
+
+    scrape_configs:
+      # ------------------------------------------------------------------
+      # Prometheus scraping itself. The cheapest possible check that the
+      # server is alive and that its own scrape loop is healthy.
+      # ------------------------------------------------------------------
+      - job_name: prometheus
+        static_configs:
+          - targets: ["localhost:9090"]
+
+      # ------------------------------------------------------------------
+      # Application metrics, discovered from Pod annotations.
+      #
+      #   prometheus.io/scrape: "true"
+      #   prometheus.io/port:   "8888"
+      #   prometheus.io/path:   "/metrics"
+      #
+      # The `keep` action drops every Pod in the cluster that does not opt in,
+      # which is nearly all of them.
+      # ------------------------------------------------------------------
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          # Never scrape a Pod that is not running: a terminating Pod produces
+          # scrape failures that look like an outage but are just a rollout.
+          - source_labels: [__meta_kubernetes_pod_phase]
+            action: keep
+            regex: Running
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            action: replace
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: replace
+            target_label: app
+
+      # ------------------------------------------------------------------
+      # The ingress controller's own metrics on port 10254.
+      #
+      # A Pod with three declared container ports produces three discovery
+      # targets; without the port-name filter all three would be rewritten to
+      # :10254 and Prometheus would scrape the same endpoint three times under
+      # three target names. Relabel regexes are fully anchored, so `http`
+      # matches the port named http and not the one named https.
+      # ------------------------------------------------------------------
+      - job_name: ingress-nginx
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [ingress-nginx]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: controller
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: http
+          - source_labels: [__address__]
+            action: replace
+            regex: ([^:]+)(?::\d+)?
+            replacement: $1:10254
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+
+      # ------------------------------------------------------------------
+      # Container CPU and memory from each kubelet's cAdvisor endpoint,
+      # reached through the API server's /proxy subresource. Going through the
+      # API server means the ServiceAccount token already in the Pod is the
+      # only credential needed - no kubelet client certificate to mount.
+      #
+      # cAdvisor exposes several hundred series per container. The
+      # metric_relabel_configs keep list cuts that to the four the dashboard
+      # actually plots; on a three-node laptop cluster that is the difference
+      # between a Prometheus that idles and one that does not.
+      # ------------------------------------------------------------------
+      - job_name: kubelet-cadvisor
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: replace
+            target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            action: replace
+            target_label: node
+          - source_labels: [__meta_kubernetes_node_name]
+            action: replace
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            action: keep
+            regex: container_(cpu_usage_seconds_total|memory_working_set_bytes|network_receive_bytes_total|network_transmit_bytes_total)
+          # The pause container reports the Pod sandbox's usage under an empty
+          # container name and would double-count every Pod.
+          - source_labels: [container]
+            action: drop
+            regex: ^$
+
+      # ------------------------------------------------------------------
+      # Argo CD. Makes the GitOps controller's own behaviour measurable:
+      # argocd_app_info carries health_status and sync_status labels, and
+      # argocd_app_sync_total counts sync operations by phase.
+      # ------------------------------------------------------------------
+      - job_name: argocd
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [argocd]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: metrics
+          - source_labels: [__meta_kubernetes_pod_phase]
+            action: keep
+            regex: Running
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: replace
+            target_label: app
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod

@@ -1,0 +1,30 @@
+# The Argo CD UI and API, on the shared ingress controller.
+#
+#   http://argocd.gitops.local:8090/
+#
+# Same entry point as the applications and Grafana; only the Host header
+# differs. `backend-protocol: HTTP` pairs with server.insecure=true in
+# 00-argocd-cmd-params-cm.yaml - the controller must speak plain HTTP to
+# argocd-server, not HTTPS.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: cse644-assignment-03
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: argocd.gitops.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  name: http

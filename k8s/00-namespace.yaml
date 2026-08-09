@@ -1,0 +1,20 @@
+# The namespace this assignment's application lives in.
+#
+# It is declared here rather than created with `kubectl create ns` or with
+# Argo CD's CreateNamespace=true sync option, for two reasons:
+#
+#   * its labels are part of the desired state, so they are reviewable in a
+#     pull request like anything else; and
+#   * because Argo CD owns it, `argocd app delete --cascade` removes it, which
+#     is what makes the cleanup demonstration a single operation with nothing
+#     left behind.
+#
+# Assignment 02 runs in the `cse644` namespace on this same cluster and is left
+# untouched, so both assignments' evidence stays reproducible side by side.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cse644-gitops
+  labels:
+    app.kubernetes.io/part-of: cse644-assignment-03
+    course: cse644

@@ -1,0 +1,20 @@
+# Non-secret configuration for the port 8888 application.
+#
+# APP_GREETING is rendered as the page heading and returned by /api/info, so a
+# change here is visible from outside without touching the image.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: cse644-gitops
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: cse644-assignment-03
+data:
+  APP_GREETING: "Python API workload, reconciled from Git."
+  APP_ENV: "development"
+  # Seconds the readiness probe is expected to fail after start, simulating a
+  # warm-up. Kept short here: this Deployment uses the Recreate strategy, so
+  # the warm-up window is real downtime on every rollout, and the failure
+  # demonstration already produces enough of that on purpose.
+  READY_DELAY_SECONDS: "8"
