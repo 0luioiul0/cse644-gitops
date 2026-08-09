@@ -53,7 +53,7 @@ spec:
         # scripts/05_git_driven_change.sh demonstrates both halves: one commit
         # that edits only the ConfigMap and visibly does nothing, then one that
         # bumps this value and rolls the fleet.
-        cse644.dev/config-revision: "1"
+        cse644.dev/config-revision: "2"
     spec:
       # Spread replicas over nodes where possible, so "multiple running
       # instances" is not three Pods on one machine.
