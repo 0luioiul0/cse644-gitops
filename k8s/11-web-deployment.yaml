@@ -72,7 +72,7 @@ spec:
           # work here, because the whole point is that the cluster's state is
           # derived from Git and a registry, not from what happens to be in a
           # local Docker daemon.
-          image: docker.io/luioiul/cse644-gitops-web:1.0.0
+          image: docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
