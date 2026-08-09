@@ -55,6 +55,9 @@ if $REMOVE_ARGOCD; then
     step "Remove Argo CD itself"
     run "k delete -n ${ARGO_NS} -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml --ignore-not-found | tail -5"
     run "k delete namespace ${ARGO_NS} --ignore-not-found --timeout=300s"
+    note "And the kube context the CLI used, so the kubeconfig is left as it"
+    note "was found."
+    run "kubectl config delete-context ${ARGO_KUBE_CONTEXT} || true"
 fi
 
 # ===========================================================================

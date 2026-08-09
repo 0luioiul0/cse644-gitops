@@ -48,7 +48,14 @@ kargo() { kubectl --context "$CTX" -n "$ARGO_NS" "$@"; }
 # The Argo CD CLI in --core mode talks to the Kubernetes API directly with the
 # kubeconfig already in use. No argocd-server login, no session token, no
 # password anywhere in these transcripts.
-argo() { ARGOCD_OPTS="--core" argocd "$@"; }
+#
+# Core mode reads its namespace from the kubeconfig context, and it needs to
+# find argocd-cm - so it needs a context whose namespace is `argocd`. Rather
+# than change the namespace on the context everything else uses, the install
+# script adds a second context pointing at the same cluster with that
+# namespace set. `kubectl config current-context` is left alone.
+ARGO_KUBE_CONTEXT="argocd-core"
+argo() { argocd --core --kube-context "$ARGO_KUBE_CONTEXT" "$@"; }
 
 # Request through the ingress controller by Host header.
 ing() {
