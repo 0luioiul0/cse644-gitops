@@ -72,7 +72,16 @@ else
     note "Deleting the project now would strand them. Re-run this script once"
     note "they have finished terminating."
 fi
-run "kargo delete ingress argocd-server --ignore-not-found"
+if $REMOVE_ARGOCD; then
+    run "kargo delete ingress argocd-server --ignore-not-found"
+else
+    note "The Argo CD ingress stays. Without --all this script removes the"
+    note "assignment and keeps the controller, and a controller whose UI is"
+    note "unreachable is not kept in any useful sense - an earlier version"
+    note "deleted it here and left argocd.gitops.local answering 404 after a"
+    note "redeploy, because the ingress is created by 03 and not by 04."
+    run "kargo get ingress argocd-server -o custom-columns='INGRESS:.metadata.name,HOST:.spec.rules[0].host'"
+fi
 
 if $REMOVE_ARGOCD; then
     step "Remove Argo CD itself"
