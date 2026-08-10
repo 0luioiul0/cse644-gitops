@@ -1,0 +1,357 @@
+===============================================================
+ CSE644 Assignment 03 - 08-failure-recovery
+ date       : 2026-08-09 23:45:39 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : 1974e4a
+===============================================================
+
+---------------------------------------------------------------
+STEP: Before: everything healthy
+---------------------------------------------------------------
+
+$ argo app get cse644-platform --refresh -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['status']; print('sync:', a['sync']['status'], '| health:', a['health']['status'])"
+sync: Synced | health: Healthy
+
+$ kn get deploy,pod -o wide
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                                      SELECTOR
+deployment.apps/api   1/1     1            1           75m   api          docker.io/luioiul/cse644-gitops-api:1.1.0   app.kubernetes.io/component=backend,app.kubernetes.io/name=api
+deployment.apps/web   3/3     3            3           12m   web          docker.io/luioiul/cse644-gitops-web:1.0.0   app.kubernetes.io/component=frontend,app.kubernetes.io/name=web
+
+NAME                       READY   STATUS    RESTARTS   AGE   IP            NODE             NOMINATED NODE   READINESS GATES
+pod/api-5d9db79cfb-b65x7   1/1     Running   0          74s   10.244.2.61   cse644-worker2   <none>           <none>
+pod/web-6cc5f8b998-685bt   1/1     Running   0          12m   10.244.2.57   cse644-worker2   <none>           <none>
+pod/web-6cc5f8b998-68hrg   1/1     Running   0          12m   10.244.1.32   cse644-worker    <none>           <none>
+pod/web-6cc5f8b998-hr7t2   1/1     Running   0          12m   10.244.2.56   cse644-worker2   <none>           <none>
+
+$ ing web.gitops.local -o /dev/null -w 'web  -> HTTP %{http_code}\n' http://localhost:8090/
+web  -> HTTP 200
+
+$ ing api.gitops.local -o /dev/null -w 'api  -> HTTP %{http_code}\n' http://localhost:8090/api/info
+api  -> HTTP 200
+
+$ ing api.gitops.local http://localhost:8090/api/notes
+{
+  "notes": [
+    "2026-08-09T22:31:24Z  pod=api-797b89d7f9-rkq4l  deployed by Argo CD from commit e639faf"
+  ]
+}
+
+---------------------------------------------------------------
+STEP: INTRODUCE THE FAILURE - one commit, both workloads
+---------------------------------------------------------------
+
+  # current tags: web 1.0.0, api 1.1.0
+
+$ sed -i 's|luioiul/cse644-gitops-web:1.0.0|luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist|' '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/k8s/11-web-deployment.yaml'
+
+$ sed -i 's|luioiul/cse644-gitops-api:1.1.0|luioiul/cse644-gitops-api:1.9.9-tag-that-does-not-exist|' '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/k8s/23-api-deployment.yaml'
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' diff --unified=1 -- k8s/11-web-deployment.yaml k8s/23-api-deployment.yaml
+diff --git a/k8s/11-web-deployment.yaml b/k8s/11-web-deployment.yaml
+index f3496d9..29cf1a3 100644
+--- a/k8s/11-web-deployment.yaml
++++ b/k8s/11-web-deployment.yaml
+@@ -74,3 +74,3 @@ spec:
+           # local Docker daemon.
+-          image: docker.io/luioiul/cse644-gitops-web:1.0.0
++          image: docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist
+           imagePullPolicy: IfNotPresent
+diff --git a/k8s/23-api-deployment.yaml b/k8s/23-api-deployment.yaml
+index 1305c75..1b528b1 100644
+--- a/k8s/23-api-deployment.yaml
++++ b/k8s/23-api-deployment.yaml
+@@ -67,3 +67,3 @@ spec:
+         - name: api
+-          image: docker.io/luioiul/cse644-gitops-api:1.1.0
++          image: docker.io/luioiul/cse644-gitops-api:1.9.9-tag-that-does-not-exist
+           imagePullPolicy: IfNotPresent
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' add k8s/11-web-deployment.yaml k8s/23-api-deployment.yaml
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' commit -m 'BREAK: bump both images to a tag that was never pushed'
+[main d8acbc2] BREAK: bump both images to a tag that was never pushed
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+  # PUSH_MODE=external: this shell cannot authenticate to GitHub,
+
+  # so the commit is delivered to origin by tooling outside it.
+
+  # origin/main is now d8acbc2e - the controller can fetch it
+[23:45:45] waiting for Argo CD to observe d8acbc2e
+
+$ argo app get cse644-platform --refresh >/dev/null
+[23:45:47] observed
+
+---------------------------------------------------------------
+STEP: DIAGNOSIS 1 - the sync succeeded. That is not the same as working.
+---------------------------------------------------------------
+
+$ argo app get cse644-platform -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['status']; print('sync  :', a['sync']['status'], a['sync']['revision'][:8]); print('health:', a['health']['status'])"
+sync  : Synced d8acbc2e
+health: Progressing
+
+  # Synced means 'the cluster matches Git'. Git asked for an image that does
+
+  # not exist, and the cluster now faithfully asks for an image that does not
+
+  # exist. Sync status is about agreement, health status is about whether the
+
+  # result works. Alerting on sync status alone would have missed this.
+
+---------------------------------------------------------------
+STEP: DIAGNOSIS 2 - what Kubernetes says
+---------------------------------------------------------------
+
+$ kn get pods -o wide
+NAME                   READY   STATUS             RESTARTS   AGE    IP            NODE             NOMINATED NODE   READINESS GATES
+api-5d9db79cfb-b65x7   1/1     Terminating        0          100s   10.244.2.61   cse644-worker2   <none>           <none>
+web-6cc5f8b998-685bt   1/1     Running            0          12m    10.244.2.57   cse644-worker2   <none>           <none>
+web-6cc5f8b998-68hrg   1/1     Running            0          12m    10.244.1.32   cse644-worker    <none>           <none>
+web-6cc5f8b998-hr7t2   1/1     Running            0          12m    10.244.2.56   cse644-worker2   <none>           <none>
+web-bbf88f6b9-ng4pf    0/1     ImagePullBackOff   0          20s    10.244.1.35   cse644-worker    <none>           <none>
+
+$ kn get rs -o custom-columns='REPLICASET:.metadata.name,IMAGE:.spec.template.spec.containers[0].image,DESIRED:.spec.replicas,READY:.status.readyReplicas'
+REPLICASET       IMAGE                                                               DESIRED   READY
+api-5d9db79cfb   docker.io/luioiul/cse644-gitops-api:1.1.0                           0         <none>
+api-797b89d7f9   docker.io/luioiul/cse644-gitops-api:1.0.0                           0         <none>
+api-868ddfc46d   docker.io/luioiul/cse644-gitops-api:1.9.9-tag-that-does-not-exist   0         <none>
+web-6cc5f8b998   docker.io/luioiul/cse644-gitops-web:1.0.0                           3         3
+web-bbf88f6b9    docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist   1         <none>
+
+$ kn get events --sort-by=.lastTimestamp | grep -i -e pull -e fail | tail -12
+2m44s       Warning   Failed              pod/api-868ddfc46d-clmwf    Error: ErrImagePull
+2m20s       Warning   Failed              pod/web-bbf88f6b9-jnvn9     Error: ImagePullBackOff
+105s        Normal    BackOff             pod/web-bbf88f6b9-jnvn9     Back-off pulling image "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist"
+102s        Warning   Failed              pod/api-868ddfc46d-clmwf    Error: ImagePullBackOff
+102s        Normal    BackOff             pod/api-868ddfc46d-clmwf    Back-off pulling image "docker.io/luioiul/cse644-gitops-api:1.9.9-tag-that-does-not-exist"
+99s         Normal    Pulled              pod/api-5d9db79cfb-b65x7    Container image "docker.io/luioiul/cse644-gitops-api:1.1.0" already present on machine
+92s         Warning   Unhealthy           pod/api-5d9db79cfb-b65x7    Readiness probe failed: HTTP probe failed with statuscode: 503
+19s         Normal    BackOff             pod/web-bbf88f6b9-ng4pf     Back-off pulling image "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist"
+19s         Warning   Failed              pod/web-bbf88f6b9-ng4pf     Error: ImagePullBackOff
+7s          Normal    Pulling             pod/web-bbf88f6b9-ng4pf     Pulling image "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist"
+6s          Warning   Failed              pod/web-bbf88f6b9-ng4pf     Failed to pull image "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist": rpc error: code = NotFound desc = failed to pull and unpack image "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist": failed to resolve reference "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist": docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist: not found
+6s          Warning   Failed              pod/web-bbf88f6b9-ng4pf     Error: ErrImagePull
+
+$ kn describe pod web-bbf88f6b9-ng4pf | sed -n '/Events:/,$p'
+Events:
+  Type     Reason     Age               From               Message
+  ----     ------     ----              ----               -------
+  Normal   Scheduled  20s               default-scheduler  Successfully assigned cse644-gitops/web-bbf88f6b9-ng4pf to cse644-worker
+  Normal   BackOff    19s               kubelet            spec.containers{web}: Back-off pulling image "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist"
+  Warning  Failed     19s               kubelet            spec.containers{web}: Error: ImagePullBackOff
+  Normal   Pulling    7s (x2 over 20s)  kubelet            spec.containers{web}: Pulling image "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist"
+  Warning  Failed     6s (x2 over 19s)  kubelet            spec.containers{web}: Failed to pull image "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist": rpc error: code = NotFound desc = failed to pull and unpack image "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist": failed to resolve reference "docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist": docker.io/luioiul/cse644-gitops-web:1.9.9-tag-that-does-not-exist: not found
+  Warning  Failed     6s (x2 over 19s)  kubelet            spec.containers{web}: Error: ErrImagePull
+
+  # The registry answered, and its answer was 'not found': containerd could
+
+  # not resolve the reference. Not a network failure and not a credential
+
+  # failure, either of which would say so - the tag was simply never pushed.
+
+---------------------------------------------------------------
+STEP: DIAGNOSIS 3 - who is actually down
+---------------------------------------------------------------
+
+$ ing web.gitops.local -o /dev/null -w 'web  -> HTTP %{http_code}\n' http://localhost:8090/
+web  -> HTTP 200
+
+$ ing api.gitops.local -o /dev/null -w 'api  -> HTTP %{http_code}\n' http://localhost:8090/api/info
+api  -> HTTP 503
+
+$ ing web.gitops.local http://localhost:8090/version
+1.0.0
+
+  # web answers, from the previous image. maxUnavailable: 0 refused to
+
+  # remove a working replica for one that never became ready.
+
+  # The 503 comes from the ingress controller, not from the application -
+
+  # there is no application left to answer. An EndpointSlice is how the
+
+  # controller learns where it may send a request, and readiness is what
+
+  # gates each address in it:
+
+$ kn get endpointslice -l kubernetes.io/service-name=api-clusterip -o custom-columns='SLICE:.metadata.name,ADDRESSES:.endpoints[*].addresses,READY:.endpoints[*].conditions.ready'
+SLICE                 ADDRESSES       READY
+api-clusterip-q6nl8   [10.244.2.61]   false
+
+$ kn get endpointslice -l kubernetes.io/service-name=web-clusterip -o custom-columns='SLICE:.metadata.name,ADDRESSES:.endpoints[*].addresses,READY:.endpoints[*].conditions.ready'
+SLICE                 ADDRESSES                                                 READY
+web-clusterip-j59w9   [10.244.1.32],[10.244.2.57],[10.244.2.56],[10.244.1.35]   true,true,true,false
+
+  # web keeps three ready addresses and carries the stuck new Pod as a
+
+  # fourth, not-ready one; the controller simply skips that address. api has
+
+  # a single address and it is not ready, so there is nothing routable left.
+
+  # That is the whole difference: RollingUpdate added a broken Pod alongside
+
+  # working ones, Recreate deleted the working Pod before discovering the
+
+  # replacement could not start.
+
+---------------------------------------------------------------
+STEP: DIAGNOSIS 4 - the Deployment gives up
+---------------------------------------------------------------
+
+  # progressDeadlineSeconds is 180 in these manifests rather than the 600s
+
+  # default, so a stuck rollout is reported within a demonstration's
+
+  # timescale. Waiting for the condition to flip:
+[23:46:08] api Progressing reason = NewReplicaSetAvailable
+[23:46:18] api Progressing reason = NewReplicaSetAvailable
+[23:46:27] api Progressing reason = NewReplicaSetAvailable
+[23:46:37] api Progressing reason = NewReplicaSetAvailable
+[23:46:47] api Progressing reason = NewReplicaSetAvailable
+[23:46:56] api Progressing reason = NewReplicaSetAvailable
+[23:47:06] api Progressing reason = NewReplicaSetAvailable
+[23:47:17] api Progressing reason = NewReplicaSetAvailable
+[23:47:27] api Progressing reason = NewReplicaSetAvailable
+[23:47:36] api Progressing reason = NewReplicaSetAvailable
+[23:47:46] api Progressing reason = NewReplicaSetAvailable
+[23:47:56] api Progressing reason = NewReplicaSetAvailable
+[23:48:05] api Progressing reason = NewReplicaSetAvailable
+[23:48:15] api Progressing reason = NewReplicaSetAvailable
+[23:48:26] api Progressing reason = NewReplicaSetAvailable
+[23:48:35] api Progressing reason = NewReplicaSetAvailable
+[23:48:45] api Progressing reason = NewReplicaSetAvailable
+[23:48:56] api Progressing reason = NewReplicaSetAvailable
+[23:49:05] api Progressing reason = NewReplicaSetAvailable
+[23:49:15] api Progressing reason = NewReplicaSetAvailable
+[23:49:25] api Progressing reason = NewReplicaSetAvailable
+[23:49:34] api Progressing reason = NewReplicaSetAvailable
+[23:49:44] api Progressing reason = NewReplicaSetAvailable
+[23:49:54] api Progressing reason = NewReplicaSetAvailable
+
+$ kn get deploy -o custom-columns='DEPLOY:.metadata.name,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas,PROGRESSING:.status.conditions[?(@.type=="Progressing")].reason'
+DEPLOY   READY    AVAILABLE   PROGRESSING
+api      <none>   <none>      NewReplicaSetAvailable
+web      3        3           ProgressDeadlineExceeded
+
+$ argo app get cse644-platform --refresh -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['status']; print('sync  :', a['sync']['status']); print('health:', a['health']['status'])"
+sync  : Synced
+health: Degraded
+
+$ argo app resources cse644-platform | grep -i -e deployment -e health || true
+apps               Deployment             cse644-gitops  api            No
+apps               Deployment             cse644-gitops  web            No
+
+---------------------------------------------------------------
+STEP: RECOVERY - correct the desired state, not the cluster
+---------------------------------------------------------------
+
+  # The tempting fix is 'kubectl set image' - it would work in about two
+
+  # seconds. It is also the wrong answer: Git would still hold the broken
+
+  # tag, selfHeal would put it back, and the next person to sync would break
+
+  # production again. The recovery has to happen where the desired state
+
+  # lives.
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' revert --no-edit d8acbc2e4b183023a22c3978a1e02d7ed00bf4b1
+[main 5908488] Revert "BREAK: bump both images to a tag that was never pushed"
+ Date: Sun Aug 9 16:50:06 2026 -0700
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' show --stat HEAD
+commit 59084882c043cf4cfd2be6c8f763ebc2814d9bf0
+Author: Chi Zhang <zhangchi915@outlook.com>
+Date:   Sun Aug 9 16:50:06 2026 -0700
+
+    Revert "BREAK: bump both images to a tag that was never pushed"
+    
+    This reverts commit d8acbc2e4b183023a22c3978a1e02d7ed00bf4b1.
+
+ k8s/11-web-deployment.yaml | 2 +-
+ k8s/23-api-deployment.yaml | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+  # PUSH_MODE=external: this shell cannot authenticate to GitHub,
+
+  # so the commit is delivered to origin by tooling outside it.
+
+  # origin/main is now 59084882 - the controller can fetch it
+[23:50:09] the revert is on origin as 59084882
+
+$ argo app get cse644-platform --refresh >/dev/null
+[23:50:11] Argo CD observed the revert
+
+$ kn rollout status deploy/api --timeout=300s
+Waiting for deployment "api" rollout to finish: 0 out of 1 new replicas have been updated...
+Waiting for deployment "api" rollout to finish: 0 out of 1 new replicas have been updated...
+Waiting for deployment "api" rollout to finish: 0 of 1 updated replicas are available...
+deployment "api" successfully rolled out
+
+$ kn rollout status deploy/web --timeout=300s
+deployment "web" successfully rolled out
+
+---------------------------------------------------------------
+STEP: After: healthy again, and nothing was applied by hand
+---------------------------------------------------------------
+
+$ argo app get cse644-platform -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['status']; print('sync  :', a['sync']['status'], a['sync']['revision'][:8]); print('health:', a['health']['status'])"
+sync  : Synced 59084882
+health: Healthy
+
+$ kn get deploy,pod -o wide
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                                      SELECTOR
+deployment.apps/api   1/1     1            1           79m   api          docker.io/luioiul/cse644-gitops-api:1.1.0   app.kubernetes.io/component=backend,app.kubernetes.io/name=api
+deployment.apps/web   3/3     3            3           16m   web          docker.io/luioiul/cse644-gitops-web:1.0.0   app.kubernetes.io/component=frontend,app.kubernetes.io/name=web
+
+NAME                       READY   STATUS    RESTARTS   AGE   IP            NODE             NOMINATED NODE   READINESS GATES
+pod/api-5d9db79cfb-xbkhf   1/1     Running   0          12s   10.244.2.63   cse644-worker2   <none>           <none>
+pod/web-6cc5f8b998-685bt   1/1     Running   0          16m   10.244.2.57   cse644-worker2   <none>           <none>
+pod/web-6cc5f8b998-68hrg   1/1     Running   0          16m   10.244.1.32   cse644-worker    <none>           <none>
+pod/web-6cc5f8b998-hr7t2   1/1     Running   0          16m   10.244.2.56   cse644-worker2   <none>           <none>
+
+$ ing web.gitops.local -o /dev/null -w 'web  -> HTTP %{http_code}\n' http://localhost:8090/
+web  -> HTTP 200
+
+$ ing api.gitops.local -o /dev/null -w 'api  -> HTTP %{http_code}\n' http://localhost:8090/api/info
+api  -> HTTP 200
+
+$ ing api.gitops.local http://localhost:8090/api/info | python3 -c "import json,sys; d=json.load(sys.stdin); print('version:', d['version'], '| pod:', d['pod'])"
+version: 1.1.0 | pod: api-5d9db79cfb-xbkhf
+
+---------------------------------------------------------------
+STEP: The data survived the outage
+---------------------------------------------------------------
+
+$ ing api.gitops.local http://localhost:8090/api/notes
+{
+  "notes": [
+    "2026-08-09T22:31:24Z  pod=api-797b89d7f9-rkq4l  deployed by Argo CD from commit e639faf"
+  ]
+}
+
+  # The PersistentVolumeClaim was never part of the broken commit, so it was
+
+  # never deleted. The notes written before the failure are still there.
+
+---------------------------------------------------------------
+STEP: The whole incident, as Git tells it
+---------------------------------------------------------------
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' log --oneline -4
+5908488 Revert "BREAK: bump both images to a tag that was never pushed"
+d8acbc2 BREAK: bump both images to a tag that was never pushed
+1974e4a Describe the EndpointSlice the way it actually reads
+3e289f8 Revert "BREAK: bump both images to a tag that was never pushed"
+
+  # Two commits: the one that broke it and the one that undid it. The
+
+  # revert is a new commit rather than a force-push, so the history of the
+
+  # incident is still readable - which is the point of recovering this way.
+
+===============================================================
+ done: 2026-08-09 23:50:24 UTC
+===============================================================

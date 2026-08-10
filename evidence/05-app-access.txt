@@ -1,0 +1,160 @@
+===============================================================
+ CSE644 Assignment 03 - 05-app-access
+ date       : 2026-08-09 22:31:24 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : e639faf
+===============================================================
+
+---------------------------------------------------------------
+STEP: Workloads
+---------------------------------------------------------------
+
+$ kn get deploy,rs,pod -o wide
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                                      SELECTOR
+deployment.apps/api   1/1     1            1           45s   api          docker.io/luioiul/cse644-gitops-api:1.0.0   app.kubernetes.io/component=backend,app.kubernetes.io/name=api
+deployment.apps/web   3/3     3            3           45s   web          docker.io/luioiul/cse644-gitops-web:1.0.0   app.kubernetes.io/component=frontend,app.kubernetes.io/name=web
+
+NAME                             DESIRED   CURRENT   READY   AGE   CONTAINERS   IMAGES                                      SELECTOR
+replicaset.apps/api-797b89d7f9   1         1         1       45s   api          docker.io/luioiul/cse644-gitops-api:1.0.0   app.kubernetes.io/component=backend,app.kubernetes.io/name=api,pod-template-hash=797b89d7f9
+replicaset.apps/web-7887d898d9   3         3         3       45s   web          docker.io/luioiul/cse644-gitops-web:1.0.0   app.kubernetes.io/component=frontend,app.kubernetes.io/name=web,pod-template-hash=7887d898d9
+
+NAME                       READY   STATUS    RESTARTS   AGE   IP            NODE             NOMINATED NODE   READINESS GATES
+pod/api-797b89d7f9-rkq4l   1/1     Running   0          45s   10.244.2.23   cse644-worker2   <none>           <none>
+pod/web-7887d898d9-2gwhq   1/1     Running   0          45s   10.244.2.18   cse644-worker2   <none>           <none>
+pod/web-7887d898d9-4m688   1/1     Running   0          45s   10.244.2.19   cse644-worker2   <none>           <none>
+pod/web-7887d898d9-6kcdm   1/1     Running   0          45s   10.244.1.17   cse644-worker    <none>           <none>
+
+$ kn get svc,ingress
+NAME                    TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)    AGE
+service/api-clusterip   ClusterIP   10.96.233.1   <none>        8888/TCP   45s
+service/web-clusterip   ClusterIP   10.96.24.65   <none>        80/TCP     45s
+
+NAME                                      CLASS   HOSTS                               ADDRESS     PORTS   AGE
+ingress.networking.k8s.io/cse644-gitops   nginx   web.gitops.local,api.gitops.local   localhost   80      45s
+
+---------------------------------------------------------------
+STEP: The web application through the ingress controller
+---------------------------------------------------------------
+
+$ ing web.gitops.local -i http://localhost:8090/ | sed -n '1,12p'
+HTTP/1.1 200 OK
+Date: Sun, 09 Aug 2026 22:31:24 GMT
+Content-Type: text/html
+Transfer-Encoding: chunked
+Connection: keep-alive
+X-Pod-Name: web-7887d898d9-6kcdm
+X-Node-Name: cse644-worker
+X-App-Env: development
+X-App-Version: 1.0.0
+
+<!doctype html>
+<html lang="en">
+
+$ ing web.gitops.local http://localhost:8090/message
+Customized Nginx, deployed from Git by Argo CD.
+
+$ ing web.gitops.local http://localhost:8090/version
+1.0.0
+
+---------------------------------------------------------------
+STEP: Three replicas behind one Service
+---------------------------------------------------------------
+
+  # Repeated calls to /whoami cycle through the Pods: this is kube-proxy
+
+  # balancing across the Deployment's replicas, not a cached page.
+
+$ for i in 1 2 3 4 5 6; do ing web.gitops.local http://localhost:8090/whoami; done | sort | uniq -c
+      3 web-7887d898d9-2gwhq
+      1 web-7887d898d9-4m688
+      2 web-7887d898d9-6kcdm
+
+---------------------------------------------------------------
+STEP: The api application through the same entry point, different Host header
+---------------------------------------------------------------
+
+$ ing api.gitops.local http://localhost:8090/api/info
+{
+  "service": "cse644-api",
+  "version": "1.0.0",
+  "pod": "api-797b89d7f9-rkq4l",
+  "node": "cse644-worker2",
+  "port": 8888,
+  "config": {
+    "APP_GREETING": "Python API workload, reconciled from Git.",
+    "APP_ENV": "development"
+  },
+  "secret": {
+    "present": true,
+    "fingerprint": "sha256:d6454d1af3358a6e",
+    "length": 48
+  },
+  "storage": {
+    "dir": "/data",
+    "writable": true,
+    "notes": [],
+    "note_count": 0,
+    "capacity_mb": 1081101.2
+  },
+  "uptime_seconds": 41.6,
+  "healthy": true
+}
+
+---------------------------------------------------------------
+STEP: Identifiable as this student's work
+---------------------------------------------------------------
+
+  # The heading comes from a ConfigMap in Git; the version comes from the
+
+  # image; the Pod name comes from the Downward API. All three appear in the
+
+  # response headers as well as the page.
+
+$ ing web.gitops.local -D - -o /dev/null http://localhost:8090/ | grep -i -e x-pod-name -e x-node-name -e x-app-
+X-Pod-Name: web-7887d898d9-4m688
+X-Node-Name: cse644-worker2
+X-App-Env: development
+X-App-Version: 1.0.0
+
+$ ing api.gitops.local -D - -o /dev/null http://localhost:8090/ | grep -i -e x-pod-name -e x-app-version
+X-Pod-Name: api-797b89d7f9-rkq4l
+X-App-Version: 1.0.0
+
+---------------------------------------------------------------
+STEP: The persistent volume, and the metric that reports it
+---------------------------------------------------------------
+
+$ ing api.gitops.local -X POST -d 'text=deployed by Argo CD from commit e639faf' http://localhost:8090/api/notes
+{
+  "stored": "2026-08-09T22:31:24Z  pod=api-797b89d7f9-rkq4l  deployed by Argo CD from commit e639faf",
+  "file": "/data/notes.log"
+}
+
+$ ing api.gitops.local http://localhost:8090/api/notes
+{
+  "notes": [
+    "2026-08-09T22:31:24Z  pod=api-797b89d7f9-rkq4l  deployed by Argo CD from commit e639faf"
+  ]
+}
+
+$ ing api.gitops.local http://localhost:8090/metrics | grep -e '^cse644_api_notes_stored' -e '^cse644_api_build_info'
+cse644_api_build_info{version="1.0.0",app_env="development"} 1
+cse644_api_notes_stored 1
+
+---------------------------------------------------------------
+STEP: The metrics endpoint the whole observability stack is built on
+---------------------------------------------------------------
+
+$ ing api.gitops.local http://localhost:8090/metrics | grep '^# HELP'
+# HELP cse644_api_build_info Version of the running application, as a label.
+# HELP cse644_api_requests_total Total HTTP requests handled, by method, route and status.
+# HELP cse644_api_request_duration_seconds Request latency in seconds.
+# HELP cse644_api_requests_in_flight Requests currently being served.
+# HELP cse644_api_notes_stored Notes currently on the persistent volume.
+# HELP cse644_api_healthy 1 if the liveness endpoint reports healthy, 0 otherwise.
+# HELP cse644_api_start_time_seconds Unix time at which the process started.
+
+===============================================================
+ done: 2026-08-09 22:31:24 UTC
+===============================================================

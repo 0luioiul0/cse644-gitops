@@ -1,0 +1,262 @@
+===============================================================
+ CSE644 Assignment 03 - 09-prometheus
+ date       : 2026-08-10 00:11:24 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : 503402d
+===============================================================
+
+---------------------------------------------------------------
+STEP: Prometheus is up and its configuration came from Git
+---------------------------------------------------------------
+
+$ kmon get deploy,pod,svc,pvc,ingress
+NAME                         READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/grafana      1/1     1            1           100m
+deployment.apps/prometheus   1/1     1            1           100m
+
+NAME                              READY   STATUS    RESTARTS   AGE
+pod/grafana-744b67ff65-7t5qs      1/1     Running   0          100m
+pod/prometheus-78bb4bb467-fgzv8   1/1     Running   0          100m
+
+NAME                 TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+service/grafana      ClusterIP   10.96.53.237    <none>        3000/TCP   100m
+service/prometheus   ClusterIP   10.96.194.248   <none>        9090/TCP   100m
+
+NAME                                    STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+persistentvolumeclaim/prometheus-data   Bound    pvc-db68bbfe-091e-4789-9c7c-be5e18128f56   2Gi        RWO            standard       <unset>                 100m
+
+NAME                                   CLASS   HOSTS                     ADDRESS     PORTS   AGE
+ingress.networking.k8s.io/grafana      nginx   grafana.gitops.local      localhost   80      100m
+ingress.networking.k8s.io/prometheus   nginx   prometheus.gitops.local   localhost   80      100m
+
+$ kmon exec deploy/prometheus -- wget -qO- http://localhost:9090/-/healthy
+Prometheus Server is Healthy.
+
+$ kmon get configmap prometheus-config -o jsonpath='{.data.prometheus\.yml}' | grep -E 'job_name|scrape_interval'
+  scrape_interval: 15s
+  - job_name: prometheus
+  - job_name: kubernetes-pods
+  - job_name: kubelet-cadvisor
+  - job_name: argocd
+
+---------------------------------------------------------------
+STEP: Every scrape target, and whether it is up
+---------------------------------------------------------------
+
+$ ing prometheus.gitops.local http://localhost:8090/api/v1/targets | python3 -c "
+import json,sys
+d=json.load(sys.stdin)['data']['activeTargets']
+w=max(len(t['labels'].get('job','')) for t in d)
+for t in sorted(d, key=lambda x: (x['labels'].get('job',''), x['scrapeUrl'])):
+    print('%-*s  %-8s  %s' % (w, t['labels'].get('job',''), t['health'], t['scrapeUrl']))
+print()
+print('targets up:', sum(1 for t in d if t['health']=='up'), 'of', len(d))
+"
+argocd            up        http://argocd-applicationset-controller.argocd.svc.cluster.local:8080/metrics
+argocd            up        http://argocd-metrics.argocd.svc.cluster.local:8082/metrics
+argocd            up        http://argocd-server-metrics.argocd.svc.cluster.local:8083/metrics
+kubelet-cadvisor  up        https://kubernetes.default.svc:443/api/v1/nodes/cse644-control-plane/proxy/metrics/cadvisor
+kubelet-cadvisor  up        https://kubernetes.default.svc:443/api/v1/nodes/cse644-worker/proxy/metrics/cadvisor
+kubelet-cadvisor  up        https://kubernetes.default.svc:443/api/v1/nodes/cse644-worker2/proxy/metrics/cadvisor
+kubernetes-pods   up        http://10.244.2.2:7472/metrics
+kubernetes-pods   up        http://10.244.2.65:8888/metrics
+kubernetes-pods   up        http://172.21.0.2:7472/metrics
+kubernetes-pods   up        http://172.21.0.3:7472/metrics
+kubernetes-pods   up        http://172.21.0.4:7472/metrics
+prometheus        up        http://localhost:9090/metrics
+
+targets up: 12 of 12
+
+  # The application target was discovered from the Pod annotations in
+
+  # k8s/23-api-deployment.yaml, not listed by hand in the scrape config.
+
+---------------------------------------------------------------
+STEP: Baseline: what the api looks like with only probes and scrapes hitting it
+---------------------------------------------------------------
+
+$ PROMQL 'sum(rate(cse644_api_requests_total[2m]))' | python3 -c "import json,sys; r=json.load(sys.stdin)['data']['result']; print('req/s =', round(float(r[0]['value'][1]),3) if r else 'no data')"
+req/s = 1.608
+
+---------------------------------------------------------------
+STEP: GENERATE LOAD - a deliberately shaped workload, from inside the cluster
+---------------------------------------------------------------
+
+  # Four minutes, in phases, so each panel has something distinguishable:
+
+  #   0:00-1:00  steady light traffic on / and /api/info
+
+  #   1:00-2:00  burst: same routes, much higher rate
+
+  #   2:00-3:00  slow requests (/api/work) - latency and in-flight rise
+
+  #   3:00-3:30  errors: /api/boom (500) and a path that does not exist (404)
+
+  #   3:30-4:00  CPU burn (/api/cpu) - the cAdvisor panel moves
+
+  #   throughout  notes are appended, so the application-state metric climbs
+
+$ k -n default create configmap loadgen-script --from-file=load.sh=/tmp/cse644-load.sh --dry-run=client -o yaml | k -n default apply -f -
+configmap/loadgen-script created
+[00:11:25] starting the load generator
+$ kubectl -n default apply -f - <<'EOF'   # loadgen Pod, script from the ConfigMap above
+pod/loadgen created
+
+$ k -n default wait --for=condition=Ready pod/loadgen --timeout=120s
+pod/loadgen condition met
+
+  # Not 'kubectl logs -f'. That opens an fsnotify watch, this host's
+
+  # fs.inotify.max_user_instances is 128 and already exhausted, and the
+
+  # follow dies instantly with 'too many open files'. An earlier run read
+
+  # that as the generator having finished: it queried Prometheus thirty
+
+  # seconds into a four-minute workload, reported a peak of 1.4 req/s, and
+
+  # then deleted the Pod mid-run. Poll for the Pod to reach a terminal
+
+  # phase instead, which depends on nothing but the API server.
+[00:11:26] waiting for the load generator to finish
+[00:15:33] load generator finished in phase Succeeded
+
+$ k -n default logs loadgen
+phase 1/5: steady baseline (60s)
+phase 2/5: burst (60s)
+phase 3/5: slow requests (60s)
+phase 4/5: errors (30s)
+phase 5/5: cpu burn (30s)
+done
+
+  # Waiting 30s so the final phase lands inside a completed scrape window.
+
+---------------------------------------------------------------
+STEP: QUERY - does Prometheus show the shape that was just generated?
+---------------------------------------------------------------
+
+$ promql: sum by (route) (rate(cse644_api_requests_total[5m]))
+  route=/readyz                                              0.344
+  route=/healthz                                             0.207
+  route=/metrics                                             0.069
+  route=/                                                    0.217
+  route=/api/info                                            8.712
+  route=/api/notes                                           0.105
+  route=/api/work                                            0.609
+  route=/api/boom                                            0.217
+  route=other                                                0.109
+  route=/api/cpu                                             0.464
+
+$ promql: sum by (status) (rate(cse644_api_requests_total[5m]))
+  status=503                                                 0.000
+  status=200                                                 10.622
+  status=201                                                 0.105
+  status=500                                                 0.217
+  status=404                                                 0.109
+
+$ promql: max_over_time(sum(rate(cse644_api_requests_total[1m]))[6m:15s])
+  (total)                                                    38.716
+
+$ promql: histogram_quantile(0.50, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[6m])))
+  (total)                                                    0.003
+
+$ promql: histogram_quantile(0.90, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[6m])))
+  (total)                                                    0.010
+
+$ promql: histogram_quantile(0.99, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[6m])))
+  (total)                                                    1.339
+
+$ promql: topk(4, sum by (route) (rate(cse644_api_request_duration_seconds_sum[6m])) / sum by (route) (rate(cse644_api_request_duration_seconds_count[6m])))
+  route=/api/work                                            0.663
+  route=/api/cpu                                             0.408
+  route=/metrics                                             0.003
+  route=/api/info                                            0.003
+
+$ promql: max_over_time(cse644_api_requests_in_flight[6m])
+  app=api,instance=10.244.2.65:8888,job=kubernetes-pods,namespace=cse644-gitops,node=cse644-worker2,pod=api-5fc77c96b9-gvr2z 3
+
+$ promql: sum(rate(cse644_api_requests_total{status=~"5.."}[6m])) / sum(rate(cse644_api_requests_total[6m]))
+  (total)                                                    0.019
+
+$ promql: cse644_api_notes_stored
+  app=api,instance=10.244.2.65:8888,job=kubernetes-pods,namespace=cse644-gitops,node=cse644-worker2,pod=api-5fc77c96b9-gvr2z 88
+
+$ promql: cse644_api_build_info
+  app=api,app_env=development,instance=10.244.2.65:8888,job=kubernetes-pods,namespace=cse644-gitops,node=cse644-worker2,pod=api-5fc77c96b9-gvr2z,version=1.2.0 1
+
+$ promql: max_over_time(sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="cse644-gitops"}[2m]))[6m:30s])
+  pod=web-6cc5f8b998-68hrg                                   0.002
+  pod=web-6cc5f8b998-hr7t2                                   0.002
+  pod=web-6cc5f8b998-685bt                                   0.001
+  pod=api-5fc77c96b9-gvr2z                                   0.276
+
+$ promql: sum by (pod) (container_memory_working_set_bytes{namespace="cse644-gitops"})
+  pod=web-6cc5f8b998-68hrg                                   25047040
+  pod=web-6cc5f8b998-hr7t2                                   25120768
+  pod=web-6cc5f8b998-685bt                                   25202688
+  pod=api-5fc77c96b9-gvr2z                                   13012992
+
+$ promql: sum by (sync_status) (argocd_app_info)
+  sync_status=Synced                                         3
+
+$ promql: sum by (health_status) (argocd_app_info)
+  health_status=Healthy                                      3
+
+---------------------------------------------------------------
+STEP: What these numbers say about the application
+---------------------------------------------------------------
+
+  # Request rate follows the generator exactly: a low baseline, a burst an
+
+  # order of magnitude higher, then a slow-request phase where the rate falls
+
+  # while latency and concurrency rise - which is the signature of work
+
+  # queueing rather than of traffic disappearing. Those two look identical on
+
+  # a request-rate graph alone and completely different once in-flight and
+
+  # the latency histogram are next to it.
+
+  # 
+
+  # The 5xx ratio is non-zero only during the error phase, and the 404s are
+
+  # separated from the 500s by the status label, so 'clients asking for the
+
+  # wrong thing' never gets confused with 'the server is failing'.
+
+  # 
+
+  # Container CPU rises only in the last phase, when /api/cpu is spinning.
+
+  # During the slow-request phase CPU stays flat while latency is at its
+
+  # worst - the workload is waiting, not computing. That distinction is the
+
+  # reason both an application metric and an infrastructure metric are on the
+
+  # same dashboard.
+
+  # 
+
+  # cse644_api_notes_stored only ever climbs, including across the Pod
+
+  # replacements in the earlier demonstrations. It is application state on a
+
+  # PersistentVolume, and a drop to zero would mean the volume was lost.
+
+---------------------------------------------------------------
+STEP: Clean up the load generator
+---------------------------------------------------------------
+
+$ k -n default delete pod loadgen --ignore-not-found
+pod "loadgen" deleted from default namespace
+
+$ k -n default delete configmap loadgen-script --ignore-not-found
+configmap "loadgen-script" deleted from default namespace
+
+===============================================================
+ done: 2026-08-10 00:16:03 UTC
+===============================================================

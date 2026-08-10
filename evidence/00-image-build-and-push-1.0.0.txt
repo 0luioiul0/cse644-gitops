@@ -1,0 +1,385 @@
+===============================================================
+ CSE644 Assignment 03 - 00-image-build-and-push
+ date       : 2026-08-09 10:14:45 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : 563da16
+===============================================================
+
+---------------------------------------------------------------
+STEP: Docker engine and registry identity
+---------------------------------------------------------------
+
+$ docker version --format 'client {{.Client.Version}} / server {{.Server.Version}}'
+client 29.1.3 / server 29.1.3
+
+$ docker system info --format '{{.Username}}' | sed 's/^/logged in to Docker Hub as: /'
+template: :1:2: executing "" at <.Username>: can't evaluate field Username in type system.dockerInfo
+logged in to Docker Hub as: 
+[exit status: 1]
+
+---------------------------------------------------------------
+STEP: Build luioiul/cse644-gitops-web:1.0.0
+---------------------------------------------------------------
+
+$ docker build --build-arg APP_VERSION=1.0.0 -t luioiul/cse644-gitops-web:1.0.0 /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/apps/web
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  12.29kB
+Step 1/8 : FROM nginx:1.27.5-alpine
+ ---> 65645c7bb6a0
+Step 2/8 : ARG APP_VERSION=0.0.0-dev
+ ---> Running in 3a64a8b1f998
+ ---> Removed intermediate container 3a64a8b1f998
+ ---> fa5acf322240
+Step 3/8 : LABEL org.opencontainers.image.title="cse644-gitops-web"       org.opencontainers.image.description="Customized Nginx workload for CSE644 Assignment 03"       org.opencontainers.image.version="${APP_VERSION}"       org.opencontainers.image.source="https://github.com/0luioiul0/cse644-gitops"       course="CSE644 Cloud Computing"
+ ---> Running in 387502d741ad
+ ---> Removed intermediate container 387502d741ad
+ ---> 73d8b8d75d6a
+Step 4/8 : ENV APP_MESSAGE="Customized Nginx, deployed by Argo CD from Git."     APP_ENV="local"     APP_VERSION=${APP_VERSION}     POD_NAME="standalone"     NODE_NAME="standalone"
+ ---> Running in 0a3f5f9d5964
+ ---> Removed intermediate container 0a3f5f9d5964
+ ---> 02cc1a412a42
+Step 5/8 : RUN rm -rf /usr/share/nginx/html/*
+ ---> Running in a9c72077965c
+ ---> Removed intermediate container a9c72077965c
+ ---> d30581947a50
+Step 6/8 : COPY site/ /usr/share/nginx/html/
+ ---> fe69b22ee0ca
+Step 7/8 : COPY default.conf.template /etc/nginx/templates/default.conf.template
+ ---> 05e591b785ef
+Step 8/8 : EXPOSE 80
+ ---> Running in b043750bdd15
+ ---> Removed intermediate container b043750bdd15
+ ---> ecfda4721238
+Successfully built ecfda4721238
+Successfully tagged luioiul/cse644-gitops-web:1.0.0
+
+---------------------------------------------------------------
+STEP: Build luioiul/cse644-gitops-api:1.0.0
+---------------------------------------------------------------
+
+$ docker build --build-arg APP_VERSION=1.0.0 -t luioiul/cse644-gitops-api:1.0.0 /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/apps/api
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  24.58kB
+Step 1/10 : FROM python:3.12.13-alpine
+ ---> 6d43704baacd
+Step 2/10 : ARG APP_VERSION=0.0.0-dev
+ ---> Running in 1268a4368f9f
+ ---> Removed intermediate container 1268a4368f9f
+ ---> c84706e68ca4
+Step 3/10 : LABEL org.opencontainers.image.title="cse644-gitops-api"       org.opencontainers.image.description="Instrumented Python workload on port 8888 for CSE644 Assignment 03"       org.opencontainers.image.version="${APP_VERSION}"       org.opencontainers.image.source="https://github.com/0luioiul0/cse644-gitops"       course="CSE644 Cloud Computing"
+ ---> Running in b7250813fceb
+ ---> Removed intermediate container b7250813fceb
+ ---> dc5bff9f7615
+Step 4/10 : ENV PORT=8888     DATA_DIR=/data     APP_VERSION=${APP_VERSION}     PYTHONUNBUFFERED=1     PYTHONDONTWRITEBYTECODE=1
+ ---> Running in f9fc2b7e7f59
+ ---> Removed intermediate container f9fc2b7e7f59
+ ---> 92d72982f08b
+Step 5/10 : WORKDIR /app
+ ---> Running in fa33c246fcb3
+ ---> Removed intermediate container fa33c246fcb3
+ ---> bc0dc983727c
+Step 6/10 : COPY app.py .
+ ---> a1bbbceab33d
+Step 7/10 : RUN adduser -D -u 10001 appuser  && mkdir -p /data  && chown -R appuser:appuser /app /data
+ ---> Running in 7dc3aa505927
+ ---> Removed intermediate container 7dc3aa505927
+ ---> ced352ee15d7
+Step 8/10 : USER 10001
+ ---> Running in 5c43a11aef75
+ ---> Removed intermediate container 5c43a11aef75
+ ---> 60b383db224c
+Step 9/10 : EXPOSE 8888
+ ---> Running in 19b7d8edf153
+ ---> Removed intermediate container 19b7d8edf153
+ ---> 389cb0d49920
+Step 10/10 : CMD ["python", "app.py"]
+ ---> Running in 1a25758a9018
+ ---> Removed intermediate container 1a25758a9018
+ ---> 25f9d8c47264
+Successfully built 25f9d8c47264
+Successfully tagged luioiul/cse644-gitops-api:1.0.0
+
+---------------------------------------------------------------
+STEP: The version is baked in, not configured
+---------------------------------------------------------------
+
+  # The manifests never set APP_VERSION. It comes from the image, so what
+
+  # the running application reports cannot disagree with what was deployed.
+
+$ docker run --rm luioiul/cse644-gitops-api:1.0.0 python -c "import os; print('APP_VERSION in image =', os.environ['APP_VERSION'])"
+APP_VERSION in image = 1.0.0
+
+$ docker image inspect luioiul/cse644-gitops-web:1.0.0 --format '{{index .Config.Labels "org.opencontainers.image.version"}}' | sed 's/^/web image label: /'
+web image label: 1.0.0
+
+---------------------------------------------------------------
+STEP: Push to Docker Hub
+---------------------------------------------------------------
+
+$ docker push luioiul/cse644-gitops-web:1.0.0
+The push refers to repository [docker.io/luioiul/cse644-gitops-web]
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+b464cfdf2a63: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Waiting
+197eb75867ef: Waiting
+34a64644b756: Waiting
+7a9e34353678: Waiting
+b464cfdf2a63: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+71bb439aeb5e: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+61ca4f733c80: Mounted from luioiul/cse644-proxy-nginx
+197eb75867ef: Mounted from luioiul/cse644-proxy-nginx
+34a64644b756: Waiting
+b464cfdf2a63: Waiting
+99dfa841ff91: Waiting
+39c2ddfd6010: Waiting
+f18232174bc9: Waiting
+81bd8ed7ec67: Waiting
+d7e507024086: Waiting
+34a64644b756: Mounted from luioiul/cse644-proxy-nginx
+b464cfdf2a63: Mounted from luioiul/cse644-proxy-nginx
+39c2ddfd6010: Mounted from luioiul/cse644-proxy-nginx
+f18232174bc9: Mounted from luioiul/cse644-proxy-nginx
+81bd8ed7ec67: Mounted from luioiul/cse644-proxy-nginx
+d7e507024086: Mounted from luioiul/cse644-proxy-nginx
+71bb439aeb5e: Pushed
+7a9e34353678: Pushed
+99dfa841ff91: Pushed
+1.0.0: digest: sha256:ecfda472123898a57780cb8a1c5ac8fbf966f2d65688ed13d69beb7b949e2b53 size: 2697
+
+$ docker push luioiul/cse644-gitops-api:1.0.0
+The push refers to repository [docker.io/luioiul/cse644-gitops-api]
+82144a88927c: Waiting
+71475e2f9a6f: Waiting
+b79325110ea2: Waiting
+e21ffc2836c1: Waiting
+55167a880c77: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+82144a88927c: Waiting
+71475e2f9a6f: Waiting
+b79325110ea2: Waiting
+e21ffc2836c1: Waiting
+55167a880c77: Waiting
+55167a880c77: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+82144a88927c: Waiting
+71475e2f9a6f: Waiting
+b79325110ea2: Waiting
+e21ffc2836c1: Waiting
+e21ffc2836c1: Waiting
+55167a880c77: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+82144a88927c: Waiting
+71475e2f9a6f: Waiting
+b79325110ea2: Waiting
+55167a880c77: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+82144a88927c: Waiting
+71475e2f9a6f: Waiting
+b79325110ea2: Waiting
+e21ffc2836c1: Waiting
+55167a880c77: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+82144a88927c: Waiting
+71475e2f9a6f: Waiting
+b79325110ea2: Waiting
+e21ffc2836c1: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+82144a88927c: Waiting
+71475e2f9a6f: Waiting
+b79325110ea2: Waiting
+e21ffc2836c1: Waiting
+55167a880c77: Waiting
+55167a880c77: Mounted from luioiul/cse644-python-web
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+82144a88927c: Waiting
+71475e2f9a6f: Waiting
+37daa602ac89: Mounted from luioiul/cse644-python-web
+71475e2f9a6f: Mounted from luioiul/cse644-python-web
+55afa1ecc21d: Waiting
+55afa1ecc21d: Mounted from luioiul/cse644-python-web
+b79325110ea2: Pushed
+82144a88927c: Pushed
+e21ffc2836c1: Pushed
+1.0.0: digest: sha256:25f9d8c47264f53f7672593235754b4bd2f45d09fc49f4566fc52a502db9d955 size: 1830
+
+---------------------------------------------------------------
+STEP: Confirm the tags resolve from the registry, not from the local daemon
+---------------------------------------------------------------
+
+$ docker manifest inspect docker.io/luioiul/cse644-gitops-web:1.0.0 | head -20
+{
+	"mediaType": "application/vnd.oci.image.manifest.v1+json",
+	"schemaVersion": 2,
+	"config": {
+		"mediaType": "application/vnd.oci.image.config.v1+json",
+		"digest": "sha256:bbd142ba8c5733aa596570b5582e0a17a3d19aaa5f3955cdf05b1b77ed257b29",
+		"size": 12822
+	},
+	"layers": [
+		{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest": "sha256:f18232174bc91741fdf3da96d85011092101a032a93a388b79e99e69c2d5c870",
+			"size": 3642247
+		},
+		{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest": "sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674",
+			"size": 1791436
+		},
+		{
+
+$ docker manifest inspect docker.io/luioiul/cse644-gitops-api:1.0.0 | head -20
+{
+	"mediaType": "application/vnd.oci.image.manifest.v1+json",
+	"schemaVersion": 2,
+	"config": {
+		"mediaType": "application/vnd.oci.image.config.v1+json",
+		"digest": "sha256:0862937dba144084a96c7eaeb12b58fcb12d9c38cd087f933e49605edb504528",
+		"size": 7662
+	},
+	"layers": [
+		{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest": "sha256:55afa1ecc21d2bb5e5045f32dafee56272ffd89860bac26f6c32123439af26a4",
+			"size": 3846391
+		},
+		{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest": "sha256:37daa602ac89f280ab5b9f9dd12d9ab9df7a0197dd5044850dc1565f354fe3ff",
+			"size": 408740
+		},
+		{
+
+===============================================================
+ done: 2026-08-09 10:15:00 UTC
+===============================================================

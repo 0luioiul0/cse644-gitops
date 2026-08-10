@@ -1,0 +1,328 @@
+===============================================================
+ CSE644 Assignment 03 - 04-gitops-deploy
+ date       : 2026-08-10 00:53:44 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : f184aa8
+===============================================================
+
+---------------------------------------------------------------
+STEP: Credentials that are deliberately NOT in Git
+---------------------------------------------------------------
+
+  # A Kubernetes Secret is base64-encoded, not encrypted. Committing one to a
+
+  # public repository publishes it. Both Secrets below are generated here and
+
+  # never leave the cluster; only their key names and lengths are printed.
+
+  # The honest cost: these two objects are outside GitOps control, so Argo CD
+
+  # can neither recreate them nor detect drift in them. Sealed Secrets or the
+
+  # External Secrets Operator is the production answer - see the README.
+
+$ k create namespace cse644-gitops --dry-run=client -o yaml | k apply -f -
+namespace/cse644-gitops created
+
+$ k create namespace cse644-monitoring --dry-run=client -o yaml | k apply -f -
+namespace/cse644-monitoring created
+$ kubectl -n cse644-gitops create secret generic api-secret --from-literal=API_KEY="$(openssl rand -hex 24)"
+secret/api-secret created
+$ kubectl -n cse644-monitoring create secret generic grafana-admin --from-literal=admin-password="$(openssl rand -hex 18)"
+secret/grafana-admin created
+
+$ kn describe secret api-secret | tail -5
+Type:  Opaque
+
+Data
+====
+API_KEY:  48 bytes
+
+$ kmon describe secret grafana-admin | tail -5
+Type:  Opaque
+
+Data
+====
+admin-password:  36 bytes
+
+---------------------------------------------------------------
+STEP: Bootstrap 1 of 2: the AppProject
+---------------------------------------------------------------
+
+  # Argo CD will not admit an Application whose project does not exist, so
+
+  # the project has to exist before anything else. It lives in
+
+  # gitops/bootstrap/ and NOT in gitops/apps/, which is the directory the
+
+  # root Application syncs, and that placement is a correctness requirement
+
+  # rather than tidiness.
+
+  # When the project was in gitops/apps/ the root Application managed it -
+
+  # and also used it, because the root Application's own spec.project is
+
+  # cse644. Deleting the root then deadlocked permanently: its finalizer has
+
+  # to delete everything it manages, which includes the project, and Argo CD
+
+  # will not delete a project while an Application still references it. The
+
+  # referencing Application was the one being deleted. scripts/cleanup.sh
+
+  # sat at 'applications=1' until it was patched out by hand.
+
+  # Bootstrap objects are created by hand and removed by hand; only the two
+
+  # child Applications are managed.
+
+$ k apply -f /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/bootstrap/00-project.yaml
+Warning: metadata.finalizers: "resources-finalizer.argocd.argoproj.io": prefer a domain-qualified finalizer name including a path (/) to avoid accidental conflicts with other finalizer writers
+appproject.argoproj.io/cse644 created
+
+$ argo proj get cse644
+Name:                        cse644
+Description:                 CSE644 Assignment 03 - GitOps-managed application platform and monitoring
+Destinations:                https://kubernetes.default.svc,cse644-gitops
+                             https://kubernetes.default.svc,cse644-monitoring
+                             https://kubernetes.default.svc,argocd
+Repositories:                https://github.com/0luioiul0/cse644-gitops.git
+Source Namespaces:           <none>
+Scoped Repositories:         <none>
+Allowed Cluster Resources:   /Namespace
+                             rbac.authorization.k8s.io/ClusterRole
+                             rbac.authorization.k8s.io/ClusterRoleBinding
+Scoped Clusters:             <none>
+Denied Namespaced Resources: <none>
+Signature keys:              <none>
+Orphaned Resources:          disabled
+
+---------------------------------------------------------------
+STEP: Bootstrap 2 of 2: the root Application
+---------------------------------------------------------------
+
+$ k apply -f /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/bootstrap/02-root-app.yaml
+Warning: metadata.finalizers: "resources-finalizer.argocd.argoproj.io": prefer a domain-qualified finalizer name including a path (/) to avoid accidental conflicts with other finalizer writers
+application.argoproj.io/cse644-root created
+
+---------------------------------------------------------------
+STEP: The root Application creates its children, which create everything else
+---------------------------------------------------------------
+
+$ argo app list -o wide
+NAME                      CLUSTER                         NAMESPACE          PROJECT  STATUS  HEALTH       SYNCPOLICY  CONDITIONS  REPO                                            PATH         TARGET
+argocd/cse644-monitoring  https://kubernetes.default.svc  cse644-monitoring  cse644   Synced  Progressing  Auto-Prune  <none>      https://github.com/0luioiul0/cse644-gitops.git  monitoring   main
+argocd/cse644-platform    https://kubernetes.default.svc  cse644-gitops      cse644   Synced  Progressing  Auto-Prune  <none>      https://github.com/0luioiul0/cse644-gitops.git  k8s          main
+argocd/cse644-root        https://kubernetes.default.svc  argocd             cse644   Synced  Healthy      Auto-Prune  <none>      https://github.com/0luioiul0/cse644-gitops.git  gitops/apps  main
+
+---------------------------------------------------------------
+STEP: Wait for the platform and monitoring Applications to converge
+---------------------------------------------------------------
+
+$ argo app get cse644-platform
+Name:               argocd/cse644-platform
+Project:            cse644
+Server:             https://kubernetes.default.svc
+Namespace:          cse644-gitops
+URL:                http://localhost:36857/applications/cse644-platform
+Source:
+- Repo:             https://github.com/0luioiul0/cse644-gitops.git
+  Target:           main
+  Path:             k8s
+SyncWindow:         Sync Allowed
+Sync Policy:        Automated (Prune)
+Sync Status:        Synced to main (f184aa8)
+Health Status:      Healthy
+
+GROUP              KIND                   NAMESPACE      NAME           STATUS  HEALTH   HOOK  MESSAGE
+networking.k8s.io  Ingress                cse644-gitops  cse644-gitops  Synced  Healthy        ingress.networking.k8s.io/cse644-gitops serverside-applied
+                   ConfigMap              cse644-gitops  api-config     Synced                 
+                   ConfigMap              cse644-gitops  web-config     Synced                 
+                   Namespace                             cse644-gitops  Synced                 
+                   PersistentVolumeClaim  cse644-gitops  api-data       Synced  Healthy        
+                   Service                cse644-gitops  api-clusterip  Synced  Healthy        
+                   Service                cse644-gitops  web-clusterip  Synced  Healthy        
+apps               Deployment             cse644-gitops  api            Synced  Healthy        
+apps               Deployment             cse644-gitops  web            Synced  Healthy        
+
+$ argo app get cse644-monitoring
+Name:               argocd/cse644-monitoring
+Project:            cse644
+Server:             https://kubernetes.default.svc
+Namespace:          cse644-monitoring
+URL:                http://localhost:43305/applications/cse644-monitoring
+Source:
+- Repo:             https://github.com/0luioiul0/cse644-gitops.git
+  Target:           main
+  Path:             monitoring
+SyncWindow:         Sync Allowed
+Sync Policy:        Automated (Prune)
+Sync Status:        Synced to main (f184aa8)
+Health Status:      Healthy
+
+GROUP                      KIND                   NAMESPACE          NAME                      STATUS   HEALTH   HOOK  MESSAGE
+                           Namespace              cse644-monitoring  cse644-monitoring         Running  Synced         namespace/cse644-monitoring serverside-applied
+                           ServiceAccount         cse644-monitoring  prometheus                Synced                  serviceaccount/prometheus serverside-applied
+                           ConfigMap              cse644-monitoring  grafana-provisioning      Synced                  configmap/grafana-provisioning serverside-applied
+                           ConfigMap              cse644-monitoring  prometheus-config         Synced                  configmap/prometheus-config serverside-applied
+                           ConfigMap              cse644-monitoring  grafana-dashboard-cse644  Synced                  configmap/grafana-dashboard-cse644 serverside-applied
+                           PersistentVolumeClaim  cse644-monitoring  prometheus-data           Synced   Healthy        persistentvolumeclaim/prometheus-data serverside-applied
+rbac.authorization.k8s.io  ClusterRole            cse644-monitoring  cse644-gitops-prometheus  Running  Synced         clusterrole.rbac.authorization.k8s.io/cse644-gitops-prometheus serverside-applied
+rbac.authorization.k8s.io  ClusterRoleBinding     cse644-monitoring  cse644-gitops-prometheus  Running  Synced         clusterrolebinding.rbac.authorization.k8s.io/cse644-gitops-prometheus serverside-applied
+                           Service                cse644-monitoring  grafana                   Synced   Healthy        service/grafana serverside-applied
+                           Service                cse644-monitoring  prometheus                Synced   Healthy        service/prometheus serverside-applied
+apps                       Deployment             cse644-monitoring  prometheus                Synced   Healthy        deployment.apps/prometheus serverside-applied
+apps                       Deployment             cse644-monitoring  grafana                   Synced   Healthy        deployment.apps/grafana serverside-applied
+networking.k8s.io          Ingress                cse644-monitoring  grafana                   Synced   Healthy        ingress.networking.k8s.io/grafana serverside-applied
+networking.k8s.io          Ingress                cse644-monitoring  prometheus                Synced   Healthy        ingress.networking.k8s.io/prometheus serverside-applied
+                           Namespace                                 cse644-monitoring         Synced                  
+rbac.authorization.k8s.io  ClusterRole                               cse644-gitops-prometheus  Synced                  
+rbac.authorization.k8s.io  ClusterRoleBinding                        cse644-gitops-prometheus  Synced                  
+
+---------------------------------------------------------------
+STEP: What Argo CD created - the whole tree, from one applied file
+---------------------------------------------------------------
+
+$ argo app resources cse644-platform
+GROUP              KIND                   NAMESPACE      NAME           ORPHANED
+                   ConfigMap              cse644-gitops  api-config     No
+                   ConfigMap              cse644-gitops  web-config     No
+                   Namespace                             cse644-gitops  No
+                   PersistentVolumeClaim  cse644-gitops  api-data       No
+                   Service                cse644-gitops  api-clusterip  No
+                   Service                cse644-gitops  web-clusterip  No
+apps               Deployment             cse644-gitops  api            No
+apps               Deployment             cse644-gitops  web            No
+networking.k8s.io  Ingress                cse644-gitops  cse644-gitops  No
+
+$ argo app resources cse644-monitoring
+GROUP                      KIND                   NAMESPACE          NAME                      ORPHANED
+                           ConfigMap              cse644-monitoring  grafana-dashboard-cse644  No
+                           ConfigMap              cse644-monitoring  grafana-provisioning      No
+                           ConfigMap              cse644-monitoring  prometheus-config         No
+                           Namespace                                 cse644-monitoring         No
+                           PersistentVolumeClaim  cse644-monitoring  prometheus-data           No
+                           Service                cse644-monitoring  grafana                   No
+                           Service                cse644-monitoring  prometheus                No
+                           ServiceAccount         cse644-monitoring  prometheus                No
+apps                       Deployment             cse644-monitoring  grafana                   No
+apps                       Deployment             cse644-monitoring  prometheus                No
+networking.k8s.io          Ingress                cse644-monitoring  grafana                   No
+networking.k8s.io          Ingress                cse644-monitoring  prometheus                No
+rbac.authorization.k8s.io  ClusterRole                               cse644-gitops-prometheus  No
+rbac.authorization.k8s.io  ClusterRoleBinding                        cse644-gitops-prometheus  No
+
+$ kn get all,ingress,pvc,configmap -o wide | grep -v '^configmap/kube-root-ca'
+NAME                       READY   STATUS    RESTARTS   AGE   IP            NODE             NOMINATED NODE   READINESS GATES
+pod/api-5fc77c96b9-k4blq   1/1     Running   0          29s   10.244.2.91   cse644-worker2   <none>           <none>
+pod/web-6cc5f8b998-kxmlm   1/1     Running   0          29s   10.244.2.87   cse644-worker2   <none>           <none>
+pod/web-6cc5f8b998-slvgg   1/1     Running   0          29s   10.244.1.40   cse644-worker    <none>           <none>
+pod/web-6cc5f8b998-vhdlm   1/1     Running   0          29s   10.244.2.88   cse644-worker2   <none>           <none>
+
+NAME                    TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE   SELECTOR
+service/api-clusterip   ClusterIP   10.96.37.251   <none>        8888/TCP   29s   app.kubernetes.io/component=backend,app.kubernetes.io/name=api
+service/web-clusterip   ClusterIP   10.96.28.205   <none>        80/TCP     29s   app.kubernetes.io/component=frontend,app.kubernetes.io/name=web
+
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                                      SELECTOR
+deployment.apps/api   1/1     1            1           29s   api          docker.io/luioiul/cse644-gitops-api:1.2.0   app.kubernetes.io/component=backend,app.kubernetes.io/name=api
+deployment.apps/web   3/3     3            3           29s   web          docker.io/luioiul/cse644-gitops-web:1.0.0   app.kubernetes.io/component=frontend,app.kubernetes.io/name=web
+
+NAME                             DESIRED   CURRENT   READY   AGE   CONTAINERS   IMAGES                                      SELECTOR
+replicaset.apps/api-5fc77c96b9   1         1         1       29s   api          docker.io/luioiul/cse644-gitops-api:1.2.0   app.kubernetes.io/component=backend,app.kubernetes.io/name=api,pod-template-hash=5fc77c96b9
+replicaset.apps/web-6cc5f8b998   3         3         3       29s   web          docker.io/luioiul/cse644-gitops-web:1.0.0   app.kubernetes.io/component=frontend,app.kubernetes.io/name=web,pod-template-hash=6cc5f8b998
+
+NAME                                      CLASS   HOSTS                               ADDRESS     PORTS   AGE
+ingress.networking.k8s.io/cse644-gitops   nginx   web.gitops.local,api.gitops.local   localhost   80      29s
+
+NAME                             STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE   VOLUMEMODE
+persistentvolumeclaim/api-data   Bound    pvc-9f22cd12-9bb0-4146-b907-a3378869e94e   256Mi      RWO            standard       <unset>                 29s   Filesystem
+
+NAME                         DATA   AGE
+configmap/api-config         3      29s
+configmap/web-config         2      29s
+
+$ kmon get all,ingress,pvc -o wide
+NAME                              READY   STATUS    RESTARTS   AGE   IP            NODE             NOMINATED NODE   READINESS GATES
+pod/grafana-744b67ff65-xk8df      1/1     Running   0          29s   10.244.1.41   cse644-worker    <none>           <none>
+pod/prometheus-78bb4bb467-jctgt   1/1     Running   0          29s   10.244.2.92   cse644-worker2   <none>           <none>
+
+NAME                 TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE   SELECTOR
+service/grafana      ClusterIP   10.96.112.195   <none>        3000/TCP   29s   app.kubernetes.io/name=grafana
+service/prometheus   ClusterIP   10.96.55.82     <none>        9090/TCP   29s   app.kubernetes.io/name=prometheus
+
+NAME                         READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                              SELECTOR
+deployment.apps/grafana      1/1     1            1           29s   grafana      docker.io/grafana/grafana:13.1.3    app.kubernetes.io/name=grafana
+deployment.apps/prometheus   1/1     1            1           29s   prometheus   docker.io/prom/prometheus:v3.13.2   app.kubernetes.io/name=prometheus
+
+NAME                                    DESIRED   CURRENT   READY   AGE   CONTAINERS   IMAGES                              SELECTOR
+replicaset.apps/grafana-744b67ff65      1         1         1       29s   grafana      docker.io/grafana/grafana:13.1.3    app.kubernetes.io/name=grafana,pod-template-hash=744b67ff65
+replicaset.apps/prometheus-78bb4bb467   1         1         1       29s   prometheus   docker.io/prom/prometheus:v3.13.2   app.kubernetes.io/name=prometheus,pod-template-hash=78bb4bb467
+
+NAME                                   CLASS   HOSTS                     ADDRESS     PORTS   AGE
+ingress.networking.k8s.io/grafana      nginx   grafana.gitops.local      localhost   80      29s
+ingress.networking.k8s.io/prometheus   nginx   prometheus.gitops.local   localhost   80      29s
+
+NAME                                    STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE   VOLUMEMODE
+persistentvolumeclaim/prometheus-data   Bound    pvc-56bb9f3b-aa0f-42e3-a420-75301b139535   2Gi        RWO            standard       <unset>                 29s   Filesystem
+
+---------------------------------------------------------------
+STEP: Every object Argo CD created carries a tracking annotation
+---------------------------------------------------------------
+
+  # This is how prune knows what it owns. Argo CD v3 tracks by annotation
+
+  # rather than by the app.kubernetes.io/instance label it used historically,
+
+  # and the difference matters here: the annotation records the application
+
+  # name, the group and kind, and the namespace and name, so the controller
+
+  # can distinguish an object it created from an identically-named object it
+
+  # merely found. A label carrying only an application name cannot, and it
+
+  # also collides with the perfectly ordinary app.kubernetes.io/instance the
+
+  # workload itself might want to set.
+
+$ kn get deploy,svc,ingress,cm -o custom-columns='KIND:.kind,NAME:.metadata.name,TRACKED-BY:.metadata.annotations.argocd\.argoproj\.io/tracking-id'
+KIND         NAME               TRACKED-BY
+Deployment   api                cse644-platform:apps/Deployment:cse644-gitops/api
+Deployment   web                cse644-platform:apps/Deployment:cse644-gitops/web
+Service      api-clusterip      cse644-platform:/Service:cse644-gitops/api-clusterip
+Service      web-clusterip      cse644-platform:/Service:cse644-gitops/web-clusterip
+Ingress      cse644-gitops      cse644-platform:networking.k8s.io/Ingress:cse644-gitops/cse644-gitops
+ConfigMap    api-config         cse644-platform:/ConfigMap:cse644-gitops/api-config
+ConfigMap    kube-root-ca.crt   <none>
+ConfigMap    web-config         cse644-platform:/ConfigMap:cse644-gitops/web-config
+
+  # And the two Secrets created by hand, for contrast. No annotation, so the
+
+  # controller does not consider them its own and prune will never touch
+
+  # them - which is the reason this deployment survives having its only
+
+  # credentials outside Git.
+
+$ kn get secret api-secret -o custom-columns='NAME:.metadata.name,TRACKED-BY:.metadata.annotations.argocd\.argoproj\.io/tracking-id'
+NAME         TRACKED-BY
+api-secret   <none>
+
+$ kmon get secret grafana-admin -o custom-columns='NAME:.metadata.name,TRACKED-BY:.metadata.annotations.argocd\.argoproj\.io/tracking-id'
+NAME            TRACKED-BY
+grafana-admin   <none>
+
+---------------------------------------------------------------
+STEP: Nothing was applied by hand except the two bootstrap files
+---------------------------------------------------------------
+
+$ argo app get cse644-platform -o json | python3 -c "import json,sys; a=json.load(sys.stdin); print('source :', a['spec']['source']['repoURL'], a['spec']['source']['path'], '@', a['spec']['source']['targetRevision']); print('synced :', a['status']['sync']['status'], 'at revision', a['status']['sync']['revision'][:8]); print('health :', a['status']['health']['status'])"
+source : https://github.com/0luioiul0/cse644-gitops.git k8s @ main
+synced : Synced at revision f184aa82
+health : Healthy
+
+===============================================================
+ done: 2026-08-10 00:54:17 UTC
+===============================================================

@@ -1,0 +1,243 @@
+===============================================================
+ CSE644 Assignment 03 - 11-cleanup
+ date       : 2026-08-10 00:52:34 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : f184aa8
+===============================================================
+
+---------------------------------------------------------------
+STEP: Before: what exists
+---------------------------------------------------------------
+
+$ argo app list -o wide
+NAME                      CLUSTER                         NAMESPACE          PROJECT  STATUS  HEALTH   SYNCPOLICY  CONDITIONS  REPO                                            PATH         TARGET
+argocd/cse644-monitoring  https://kubernetes.default.svc  cse644-monitoring  cse644   Synced  Healthy  Auto-Prune  <none>      https://github.com/0luioiul0/cse644-gitops.git  monitoring   main
+argocd/cse644-platform    https://kubernetes.default.svc  cse644-gitops      cse644   Synced  Healthy  Auto-Prune  <none>      https://github.com/0luioiul0/cse644-gitops.git  k8s          main
+argocd/cse644-root        https://kubernetes.default.svc  argocd             cse644   Synced  Healthy  Auto-Prune  <none>      https://github.com/0luioiul0/cse644-gitops.git  gitops/apps  main
+
+$ k get ns | grep -e cse644 -e argocd
+argocd               Active   154m
+cse644               Active   41h
+cse644-gitops        Active   31s
+cse644-monitoring    Active   31s
+
+$ kn get all,ingress,pvc 2>/dev/null | head -20
+NAME                       READY   STATUS    RESTARTS   AGE
+pod/api-5fc77c96b9-t7l2s   1/1     Running   0          28s
+pod/web-6cc5f8b998-6nz4b   1/1     Running   0          28s
+pod/web-6cc5f8b998-hdk4x   1/1     Running   0          28s
+pod/web-6cc5f8b998-wk89f   1/1     Running   0          28s
+
+NAME                    TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+service/api-clusterip   ClusterIP   10.96.197.29    <none>        8888/TCP   28s
+service/web-clusterip   ClusterIP   10.96.203.175   <none>        80/TCP     28s
+
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/api   1/1     1            1           28s
+deployment.apps/web   3/3     3            3           28s
+
+NAME                             DESIRED   CURRENT   READY   AGE
+replicaset.apps/api-5fc77c96b9   1         1         1       28s
+replicaset.apps/web-6cc5f8b998   3         3         3       28s
+
+NAME                                      CLASS   HOSTS                               ADDRESS     PORTS   AGE
+ingress.networking.k8s.io/cse644-gitops   nginx   web.gitops.local,api.gitops.local   localhost   80      28s
+[exit status: 141]
+
+$ kmon get all,ingress,pvc 2>/dev/null | head -20
+NAME                              READY   STATUS    RESTARTS   AGE
+pod/grafana-744b67ff65-gbmgb      1/1     Running   0          28s
+pod/prometheus-78bb4bb467-nl8qq   1/1     Running   0          28s
+
+NAME                 TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+service/grafana      ClusterIP   10.96.146.234   <none>        3000/TCP   28s
+service/prometheus   ClusterIP   10.96.236.100   <none>        9090/TCP   28s
+
+NAME                         READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/grafana      1/1     1            1           28s
+deployment.apps/prometheus   1/1     1            1           28s
+
+NAME                                    DESIRED   CURRENT   READY   AGE
+replicaset.apps/grafana-744b67ff65      1         1         1       28s
+replicaset.apps/prometheus-78bb4bb467   1         1         1       28s
+
+NAME                                   CLASS   HOSTS                     ADDRESS     PORTS   AGE
+ingress.networking.k8s.io/grafana      nginx   grafana.gitops.local      localhost   80      28s
+ingress.networking.k8s.io/prometheus   nginx   prometheus.gitops.local   localhost   80      28s
+
+[exit status: 141]
+
+---------------------------------------------------------------
+STEP: Delete the root Application; the cascade does the rest
+---------------------------------------------------------------
+
+  # One object. Its finalizer removes the two child Applications, whose
+
+  # finalizers remove every object those Applications created - including
+
+  # the two namespaces, because the namespaces are themselves manifests in
+
+  # the repository.
+
+$ kargo delete application cse644-root --wait=true --timeout=300s
+application.argoproj.io "cse644-root" deleted from argocd namespace
+
+---------------------------------------------------------------
+STEP: Wait for the children and their objects to go
+---------------------------------------------------------------
+[00:53:08] applications=0  namespaces=0
+
+---------------------------------------------------------------
+STEP: Remove the AppProject and the Argo CD ingress
+---------------------------------------------------------------
+
+  # Both were applied by hand during bootstrap, so neither is owned by an
+
+  # Application and neither is removed by the cascade.
+
+  # Order matters, and getting it wrong deadlocks the cluster. An Application
+
+  # carrying the resources-finalizer cannot finish deleting unless the
+
+  # controller can still resolve its AppProject; delete the project first and
+
+  # the Application hangs in Terminating forever, the project hangs on its own
+
+  # finalizer waiting for the Application, and the only way out is to patch
+
+  # the finalizers off both by hand. Hence the wait loop above, and the guard
+
+  # below: the project is only removed once every Application is actually
+
+  # gone.
+
+  # The same deadlock used to be unavoidable, because the project lived in
+
+  # gitops/apps/ and was therefore managed by the root Application - which
+
+  # also referenced it. Deleting the root required deleting the project,
+
+  # deleting the project required no Application to reference it, and the
+
+  # referencing Application was the root. It now lives in gitops/bootstrap/,
+
+  # outside anything Argo CD manages, so the cascade can complete.
+
+$ kargo delete appproject cse644 --ignore-not-found
+appproject.argoproj.io "cse644" deleted from argocd namespace
+
+$ kargo delete ingress argocd-server --ignore-not-found
+
+---------------------------------------------------------------
+STEP: VERIFY - the checks that would fail if anything survived
+---------------------------------------------------------------
+
+$ k get ns
+NAME                 STATUS   AGE
+argocd               Active   154m
+cse644               Active   41h
+default              Active   41h
+ingress-nginx        Active   41h
+kube-node-lease      Active   41h
+kube-public          Active   41h
+kube-system          Active   41h
+local-path-storage   Active   41h
+metallb-system       Active   41h
+
+$ k get ns cse644-gitops
+Error from server (NotFound): namespaces "cse644-gitops" not found
+[exit status: 1 - failure expected here, this is the evidence]
+
+$ k get ns cse644-monitoring
+Error from server (NotFound): namespaces "cse644-monitoring" not found
+[exit status: 1 - failure expected here, this is the evidence]
+
+  # Namespaced objects: gone with their namespaces.
+
+$ k get all -A 2>/dev/null | grep -e cse644-gitops -e cse644-monitoring || echo 'no workloads remain'
+no workloads remain
+
+  # Cluster-scoped objects do NOT go with a namespace. The ClusterRole and
+
+  # ClusterRoleBinding Prometheus needed are the ones that would be left
+
+  # behind by a namespace-only cleanup, so they are checked by name.
+
+$ k get clusterrole,clusterrolebinding | grep cse644 || echo 'no cluster-scoped leftovers'
+no cluster-scoped leftovers
+
+  # PersistentVolumes are cluster-scoped too. Their claims were deleted with
+
+  # the namespaces; the StorageClass reclaim policy is Delete, so the volumes
+
+  # follow. Anything Released or Available here would be a leak.
+
+$ k get pv | grep -e cse644-gitops -e cse644-monitoring || echo 'no volumes remain'
+no volumes remain
+
+  # The two Secrets that were never in Git went with their namespaces. The
+
+  # check is scoped by namespace, not by name: Assignment 02 runs a Secret
+
+  # also called api-secret in the cse644 namespace, and a name-only grep
+
+  # reports that as a survivor of this cleanup, which it is not.
+
+$ k get secret -A --no-headers 2>/dev/null | awk '$1 ~ /^cse644-(gitops|monitoring)$/ {print}' | grep . || echo 'no Secrets remain in either namespace of this assignment'
+no Secrets remain in either namespace of this assignment
+
+  # For contrast, every api-secret on the cluster and where it lives:
+
+$ k get secret -A --no-headers 2>/dev/null | awk '$2 == "api-secret" {print "  namespace=" $1 "  name=" $2 "  (Assignment 02, deliberately untouched)"}'
+  namespace=cse644  name=api-secret  (Assignment 02, deliberately untouched)
+
+  # The ingress host names no longer resolve to a backend.
+
+$ ing web.gitops.local -o /dev/null -w 'web.gitops.local      -> HTTP %{http_code}\n' http://localhost:8090/
+web.gitops.local      -> HTTP 404
+
+$ ing api.gitops.local -o /dev/null -w 'api.gitops.local      -> HTTP %{http_code}\n' http://localhost:8090/
+api.gitops.local      -> HTTP 404
+
+$ ing grafana.gitops.local -o /dev/null -w 'grafana.gitops.local  -> HTTP %{http_code}\n' http://localhost:8090/
+grafana.gitops.local  -> HTTP 404
+
+  # 404 from the ingress controller's default backend: the Ingress objects
+
+  # are gone, so the controller has no rule for these host names.
+
+---------------------------------------------------------------
+STEP: What is deliberately still running
+---------------------------------------------------------------
+
+$ k get nodes
+NAME                   STATUS   ROLES           AGE   VERSION
+cse644-control-plane   Ready    control-plane   41h   v1.34.0
+cse644-worker          Ready    <none>          41h   v1.34.0
+cse644-worker2         Ready    <none>          41h   v1.34.0
+
+$ k get ns cse644 -o custom-columns='NAMESPACE:.metadata.name,STATUS:.status.phase' 2>/dev/null || echo 'assignment 02 namespace not present on this cluster'
+NAMESPACE   STATUS
+cse644      Active
+
+$ k -n cse644 get deploy 2>/dev/null || true
+NAME      READY   UP-TO-DATE   AVAILABLE   AGE
+api       1/1     1            1           41h
+haproxy   1/1     1            1           41h
+web       3/3     3            3           41h
+
+$ k get pods -n ingress-nginx -n metallb-system 2>/dev/null | head -5
+NAME                          READY   STATUS    RESTARTS        AGE
+controller-6599cd9c46-98qnl   1/1     Running   89 (155m ago)   41h
+speaker-7qbxt                 1/1     Running   92 (155m ago)   41h
+speaker-kb4qd                 1/1     Running   89 (155m ago)   41h
+speaker-zmdtr                 1/1     Running   91 (155m ago)   41h
+
+  # Assignment 02's workloads, the ingress controller, MetalLB and the
+
+  # cluster itself are untouched. This script removes what it created and
+
+  # nothing else.
+
+===============================================================

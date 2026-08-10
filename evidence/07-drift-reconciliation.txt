@@ -1,0 +1,373 @@
+===============================================================
+ CSE644 Assignment 03 - 07-drift-reconciliation
+ date       : 2026-08-09 23:31:22 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : 0d8306a
+===============================================================
+
+---------------------------------------------------------------
+STEP: Starting state
+---------------------------------------------------------------
+
+$ kn get deploy web -o custom-columns='DEPLOY:.metadata.name,REPLICAS:.spec.replicas,READY:.status.readyReplicas'
+DEPLOY   REPLICAS   READY
+web      3          3
+
+$ kn get configmap web-config -o jsonpath='{.data.APP_MESSAGE}'; echo
+Customized Nginx, reconciled from Git by Argo CD (config revision 2).
+
+$ argo app get cse644-platform --refresh -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['status']; print('sync:', a['sync']['status'], '| health:', a['health']['status'])"
+sync: Synced | health: Healthy
+
+---------------------------------------------------------------
+STEP: PART 1 - turn selfHeal off, through Git
+---------------------------------------------------------------
+
+  # Not with 'argocd app set'. gitops/apps/10-platform.yaml is synced by the
+
+  # root Application, so a CLI edit to this Application would itself be drift
+
+  # and would be reverted. Changing the file is the only durable way.
+
+$ sed -n '/^  syncPolicy:/,/^  revisionHistoryLimit/p' '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/apps/10-platform.yaml'
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      # The namespace is a manifest in k8s/, so Argo CD must not invent one.
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  revisionHistoryLimit: 5
+
+$ sed -i '0,/      selfHeal: true/s//      selfHeal: false/' '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/apps/10-platform.yaml'
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' diff -- gitops/apps/10-platform.yaml
+diff --git a/gitops/apps/10-platform.yaml b/gitops/apps/10-platform.yaml
+index 12b8ffb..2b633c6 100644
+--- a/gitops/apps/10-platform.yaml
++++ b/gitops/apps/10-platform.yaml
+@@ -44,7 +44,7 @@ spec:
+   syncPolicy:
+     automated:
+       prune: true
+-      selfHeal: true
++      selfHeal: false
+     syncOptions:
+       - ServerSideApply=true
+       # The namespace is a manifest in k8s/, so Argo CD must not invent one.
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' add gitops/apps/10-platform.yaml
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' commit -m 'Disable selfHeal on the platform Application to demonstrate drift detection'
+[main 7b34ae9] Disable selfHeal on the platform Application to demonstrate drift detection
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+  # PUSH_MODE=external: this shell cannot authenticate to GitHub,
+
+  # so the commit is delivered to origin by tooling outside it.
+
+  # origin/main is now 7b34ae97 - the controller can fetch it
+
+$ kargo get application cse644-platform -o jsonpath='{.spec.syncPolicy.automated}'; echo
+{"prune":true,"selfHeal":false}
+
+  # selfHeal is off - but that is not yet enough to introduce drift safely.
+
+  # This commit changed main, and the platform Application tracks main too.
+
+  # A new revision is a change in *desired* state, which an automated sync
+
+  # acts on whether or not selfHeal is set: selfHeal governs drift in the
+
+  # live cluster, not new commits. So a sync is still pending, and when it
+
+  # runs it applies every manifest in k8s/ - erasing any drift introduced
+
+  # before it lands.
+
+  # And there is a second, sharper trap underneath that one, which cost this
+
+  # script three wrong runs before the controller log gave it up.
+
+  # selfHeal: false does not mean 'never revert drift'. The controller skips
+
+  # the automated sync only when it has ALREADY ATTEMPTED a sync at the
+
+  # current revision - that is the 'Already attempted sync: comparing synced
+
+  # revisions to [...]' line in its log. This commit touches gitops/apps/ and
+
+  # not k8s/, so the manifests this Application reads are byte-identical to
+
+  # the previous revision and no sync runs for it: the app reports Synced at
+
+  # a revision it has never actually applied. Its last recorded operation is
+
+  # for an older commit. So the next divergence, whatever causes it, is not
+
+  # judged as drift at all - it is judged as an unsynced revision, and the
+
+  # controller performs a FULL automated sync that erases the drift as a
+
+  # side effect. In the log that is 'Initiated automated sync' with an empty
+
+  # resource list, at the same second as the drift, which is easy to read as
+
+  # selfHeal working. It is not: a self-heal names the resource it is
+
+  # repairing and carries a SelfHealAttemptsCount, as PART 5 below shows.
+
+  # 
+
+  # The fix is to give the Application a sync operation at the current
+
+  # revision, so a later divergence is judged on its own. It applies the same
+
+  # manifests it already has, and changes nothing in the cluster.
+
+$ argo app sync cse644-platform | tail -4
+apps               Deployment             cse644-gitops  api            Synced   Healthy        deployment.apps/api serverside-applied
+apps               Deployment             cse644-gitops  web            Synced   Healthy        deployment.apps/web serverside-applied
+networking.k8s.io  Ingress                cse644-gitops  cse644-gitops  Synced   Healthy        ingress.networking.k8s.io/cse644-gitops serverside-applied
+                   Namespace                             cse644-gitops  Synced                  
+
+$ kargo get application cse644-platform -o jsonpath='last applied operation: {.status.operationState.phase}{" at "}{.status.operationState.syncResult.revision}'; echo
+last applied operation: Succeeded at 7b34ae97598fca87b1ee06e701912daf4742c245
+[23:31:44] waiting for the controller to go quiet about 7b34ae97
+[23:32:00] quiet, and the current revision has been applied - drift is now drift
+
+---------------------------------------------------------------
+STEP: PART 2 - change the live cluster directly, behind Git's back
+---------------------------------------------------------------
+
+  # Two changes an operator might plausibly make in a hurry: scale down, and
+
+  # edit a message. Both objects are declared in Git, so both are now wrong.
+[23:32:00] introducing drift
+
+$ kn scale deployment/web --replicas=1
+deployment.apps/web scaled
+
+$ kn patch configmap web-config --type merge -p '{"data":{"APP_MESSAGE":"edited directly on the cluster with kubectl"}}'
+configmap/web-config patched
+
+---------------------------------------------------------------
+STEP: Argo CD detects it
+---------------------------------------------------------------
+
+$ argo app get cse644-platform --refresh -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['status']; print('sync:', a['sync']['status'], '| health:', a['health']['status'])"
+sync: OutOfSync | health: Healthy
+
+$ argo app get cse644-platform | sed -n '/GROUP/,$p'
+GROUP              KIND                   NAMESPACE      NAME           STATUS     HEALTH   HOOK  MESSAGE
+                   Namespace              cse644-gitops  cse644-gitops  Running    Synced         namespace/cse644-gitops serverside-applied
+                   ConfigMap              cse644-gitops  web-config     OutOfSync                 configmap/web-config serverside-applied
+                   ConfigMap              cse644-gitops  api-config     Synced                    configmap/api-config serverside-applied
+                   PersistentVolumeClaim  cse644-gitops  api-data       Synced     Healthy        persistentvolumeclaim/api-data serverside-applied
+                   Service                cse644-gitops  api-clusterip  Synced     Healthy        service/api-clusterip serverside-applied
+                   Service                cse644-gitops  web-clusterip  Synced     Healthy        service/web-clusterip serverside-applied
+apps               Deployment             cse644-gitops  api            Synced     Healthy        deployment.apps/api serverside-applied
+apps               Deployment             cse644-gitops  web            OutOfSync  Healthy        deployment.apps/web serverside-applied
+networking.k8s.io  Ingress                cse644-gitops  cse644-gitops  Synced     Healthy        ingress.networking.k8s.io/cse644-gitops serverside-applied
+                   Namespace                             cse644-gitops  Synced                    
+
+---------------------------------------------------------------
+STEP: And says exactly what differs
+---------------------------------------------------------------
+
+  # argocd app diff prints desired-versus-live per object. Left is Git.
+
+$ argo app diff cse644-platform || true
+
+===== /ConfigMap cse644-gitops/web-config ======
+4c4
+<   APP_MESSAGE: edited directly on the cluster with kubectl
+---
+>   APP_MESSAGE: Customized Nginx, reconciled from Git by Argo CD (config revision 2).
+
+===== apps/Deployment cse644-gitops/web ======
+149c149
+<   replicas: 1
+---
+>   replicas: 3
+
+---------------------------------------------------------------
+STEP: The difference persists - detection alone changes nothing
+---------------------------------------------------------------
+[23:32:12] replicas=1  sync=OutOfSync
+[23:32:22] replicas=1  sync=OutOfSync
+[23:32:31] replicas=1  sync=OutOfSync
+[23:32:42] replicas=1  sync=OutOfSync
+[23:32:52] replicas=1  sync=OutOfSync
+[23:33:01] replicas=1  sync=OutOfSync
+
+$ kn get deploy web -o custom-columns='DEPLOY:.metadata.name,REPLICAS:.spec.replicas,READY:.status.readyReplicas'
+DEPLOY   REPLICAS   READY
+web      1          1
+
+  # A minute of the cluster being wrong, reported accurately and left alone.
+
+  # That is the correct behaviour for selfHeal: false - Argo CD is telling
+
+  # the truth and waiting for a human to decide.
+
+---------------------------------------------------------------
+STEP: PART 3 - reconcile on demand
+---------------------------------------------------------------
+[23:33:11] operator runs a manual sync
+
+$ argo app sync cse644-platform --prune | tail -30
+Namespace:          cse644-gitops
+URL:                http://localhost:37285/applications/cse644-platform
+Source:
+- Repo:             https://github.com/0luioiul0/cse644-gitops.git
+  Target:           main
+  Path:             k8s
+SyncWindow:         Sync Allowed
+Sync Policy:        Automated (Prune)
+Sync Status:        Synced to main (7b34ae9)
+Health Status:      Progressing
+
+Operation:          Sync
+Sync Revision:      7b34ae97598fca87b1ee06e701912daf4742c245
+Phase:              Succeeded
+Start:              2026-08-09 16:33:12 -0700 PDT
+Finished:           2026-08-09 16:33:12 -0700 PDT
+Duration:           0s
+Message:            successfully synced (all tasks run)
+
+GROUP              KIND                   NAMESPACE      NAME           STATUS   HEALTH       HOOK  MESSAGE
+                   Namespace              cse644-gitops  cse644-gitops  Running  Synced             namespace/cse644-gitops serverside-applied
+                   ConfigMap              cse644-gitops  api-config     Synced                      configmap/api-config serverside-applied
+                   ConfigMap              cse644-gitops  web-config     Synced                      configmap/web-config serverside-applied
+                   PersistentVolumeClaim  cse644-gitops  api-data       Synced   Healthy            persistentvolumeclaim/api-data serverside-applied
+                   Service                cse644-gitops  web-clusterip  Synced   Healthy            service/web-clusterip serverside-applied
+                   Service                cse644-gitops  api-clusterip  Synced   Healthy            service/api-clusterip serverside-applied
+apps               Deployment             cse644-gitops  api            Synced   Healthy            deployment.apps/api serverside-applied
+apps               Deployment             cse644-gitops  web            Synced   Progressing        deployment.apps/web serverside-applied
+networking.k8s.io  Ingress                cse644-gitops  cse644-gitops  Synced   Healthy            ingress.networking.k8s.io/cse644-gitops serverside-applied
+                   Namespace                             cse644-gitops  Synced                      
+
+$ kn get deploy web -o custom-columns='DEPLOY:.metadata.name,REPLICAS:.spec.replicas,READY:.status.readyReplicas'
+DEPLOY   REPLICAS   READY
+web      3          1
+
+$ kn get configmap web-config -o jsonpath='{.data.APP_MESSAGE}'; echo '   <- back to the value in Git'
+Customized Nginx, reconciled from Git by Argo CD (config revision 2).   <- back to the value in Git
+
+---------------------------------------------------------------
+STEP: PART 4 - turn selfHeal back on, through Git
+---------------------------------------------------------------
+
+$ sed -i '0,/      selfHeal: false/s//      selfHeal: true/' '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/apps/10-platform.yaml'
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' diff -- gitops/apps/10-platform.yaml
+diff --git a/gitops/apps/10-platform.yaml b/gitops/apps/10-platform.yaml
+index 2b633c6..12b8ffb 100644
+--- a/gitops/apps/10-platform.yaml
++++ b/gitops/apps/10-platform.yaml
+@@ -44,7 +44,7 @@ spec:
+   syncPolicy:
+     automated:
+       prune: true
+-      selfHeal: false
++      selfHeal: true
+     syncOptions:
+       - ServerSideApply=true
+       # The namespace is a manifest in k8s/, so Argo CD must not invent one.
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' add gitops/apps/10-platform.yaml
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' commit -m 'Re-enable selfHeal on the platform Application'
+[main c3be0ad] Re-enable selfHeal on the platform Application
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+  # PUSH_MODE=external: this shell cannot authenticate to GitHub,
+
+  # so the commit is delivered to origin by tooling outside it.
+
+  # origin/main is now c3be0ad5 - the controller can fetch it
+
+$ kargo get application cse644-platform -o jsonpath='{.spec.syncPolicy.automated}'; echo
+{"prune":true,"selfHeal":true}
+
+---------------------------------------------------------------
+STEP: PART 5 - the same drift, with selfHeal on
+---------------------------------------------------------------
+[23:33:30] introducing the same drift again
+$ kubectl -n cse644-gitops scale deployment/web --replicas=1
+
+  # Reverted after 921 ms, with nobody watching.
+
+$ kn get deploy web -o jsonpath='{.spec.replicas}'; echo '   <- back to the value in Git'
+3   <- back to the value in Git
+
+$ kn get deploy web -o custom-columns='DEPLOY:.metadata.name,REPLICAS:.spec.replicas,READY:.status.readyReplicas'
+DEPLOY   REPLICAS   READY
+web      3          1
+
+$ kargo get application cse644-platform -o jsonpath='{.status.sync.status}'; echo
+Synced
+
+---------------------------------------------------------------
+STEP: PART 6 - delete a managed object outright
+---------------------------------------------------------------
+
+  # The strongest form of drift: the object is gone, not merely different.
+[23:33:31] deleting the entire web Deployment
+
+$ kn delete deployment web
+deployment.apps "web" deleted from cse644-gitops namespace
+
+$ kn get deploy 2>&1 | head -5
+NAME   READY   UP-TO-DATE   AVAILABLE   AGE
+api    1/1     1            1           62m
+[23:33:33] the Deployment came back after 880 ms
+
+$ kn rollout status deploy/web --timeout=180s
+Waiting for deployment "web" rollout to finish: 0 of 3 updated replicas are available...
+Waiting for deployment "web" rollout to finish: 1 of 3 updated replicas are available...
+Waiting for deployment "web" rollout to finish: 2 of 3 updated replicas are available...
+deployment "web" successfully rolled out
+
+$ kn get deploy,pod -l app.kubernetes.io/name=web
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/web   3/3     3            3           2s
+
+NAME                       READY   STATUS    RESTARTS   AGE
+pod/web-6cc5f8b998-685bt   1/1     Running   0          2s
+pod/web-6cc5f8b998-68hrg   1/1     Running   0          2s
+pod/web-6cc5f8b998-hr7t2   1/1     Running   0          2s
+
+$ ing web.gitops.local http://localhost:8090/message
+<html>
+<head><title>503 Service Temporarily Unavailable</title></head>
+<body>
+<center><h1>503 Service Temporarily Unavailable</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+
+  # Nobody re-applied anything. The desired state never changed; only the
+
+  # cluster did, and the controller put it back.
+
+---------------------------------------------------------------
+STEP: Final state
+---------------------------------------------------------------
+
+$ argo app get cse644-platform -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['status']; print('sync:', a['sync']['status'], a['sync']['revision'][:8], '| health:', a['health']['status'])"
+sync: Synced c3be0ad5 | health: Healthy
+
+===============================================================
+ done: 2026-08-09 23:33:36 UTC
+===============================================================

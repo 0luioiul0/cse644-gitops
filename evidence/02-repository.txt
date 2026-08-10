@@ -1,0 +1,207 @@
+===============================================================
+ CSE644 Assignment 03 - 02-repository
+ date       : 2026-08-09 22:31:20 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : e639faf
+===============================================================
+
+---------------------------------------------------------------
+STEP: Remote and branch
+---------------------------------------------------------------
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' remote -v
+origin	https://github.com/0luioiul0/cse644-gitops.git (fetch)
+origin	https://github.com/0luioiul0/cse644-gitops.git (push)
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' branch --show-current
+main
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' status --short --branch
+## main...origin/main
+ M scripts/04_bootstrap.sh
+ M scripts/cleanup.sh
+?? evidence/
+
+---------------------------------------------------------------
+STEP: Revision history
+---------------------------------------------------------------
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' log --oneline --decorate --graph -30
+* e639faf (HEAD -> main, origin/main) Stop Argo CD from applying the example Secret over the real one
+* aeb0ec2 Fix the latency histogram double-counting every observation
+* 563da16 CSE644 Assignment 03: GitOps-managed application platform with Prometheus and Grafana
+
+---------------------------------------------------------------
+STEP: What the repository holds
+---------------------------------------------------------------
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' ls-files | sed 's|/[^/]*$||' | sort | uniq -c | sort -rn
+     15 scripts
+     10 k8s
+      9 monitoring
+      3 gitops/apps
+      2 gitops/bootstrap
+      2 apps/web
+      2 apps/api
+      1 .gitignore
+      1 .gitattributes
+      1 apps/web/site
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' ls-files
+.gitattributes
+.gitignore
+apps/api/Dockerfile
+apps/api/app.py
+apps/web/Dockerfile
+apps/web/default.conf.template
+apps/web/site/index.html
+gitops/apps/00-project.yaml
+gitops/apps/10-platform.yaml
+gitops/apps/20-monitoring.yaml
+gitops/bootstrap/01-argocd-ingress.yaml
+gitops/bootstrap/02-root-app.yaml
+k8s/00-namespace.yaml
+k8s/10-web-configmap.yaml
+k8s/11-web-deployment.yaml
+k8s/12-web-service.yaml
+k8s/20-api-configmap.yaml
+k8s/21-api-secret.yaml.example
+k8s/22-api-pvc.yaml
+k8s/23-api-deployment.yaml
+k8s/24-api-service.yaml
+k8s/30-ingress.yaml
+monitoring/00-namespace.yaml
+monitoring/10-prometheus-rbac.yaml
+monitoring/11-prometheus-config.yaml
+monitoring/12-prometheus-deployment.yaml
+monitoring/13-prometheus-service.yaml
+monitoring/20-grafana-provisioning.yaml
+monitoring/21-grafana-dashboard.yaml
+monitoring/22-grafana-deployment.yaml
+monitoring/23-grafana-service.yaml
+scripts/00_build_images.sh
+scripts/01_cluster_check.sh
+scripts/02_repository.sh
+scripts/03_argocd_install.sh
+scripts/04_bootstrap.sh
+scripts/05_app_access.sh
+scripts/06_git_driven_change.sh
+scripts/07_drift_reconciliation.sh
+scripts/08_failure_recovery.sh
+scripts/09_observability.sh
+scripts/10_grafana.sh
+scripts/11_screenshots.sh
+scripts/cleanup.sh
+scripts/lib.sh
+scripts/run_all.sh
+
+---------------------------------------------------------------
+STEP: The four things the assignment asks the repository to contain
+---------------------------------------------------------------
+
+$ ls -1 /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/apps/web /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/apps/api          # application source and container build
+/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/apps/api:
+app.py
+Dockerfile
+
+/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/apps/web:
+default.conf.template
+Dockerfile
+site
+
+$ ls -1 /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/k8s                                # Kubernetes configuration
+00-namespace.yaml
+10-web-configmap.yaml
+11-web-deployment.yaml
+12-web-service.yaml
+20-api-configmap.yaml
+21-api-secret.yaml.example
+22-api-pvc.yaml
+23-api-deployment.yaml
+24-api-service.yaml
+30-ingress.yaml
+
+$ ls -1 /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/apps /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/bootstrap  # GitOps configuration
+/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/apps:
+00-project.yaml
+10-platform.yaml
+20-monitoring.yaml
+
+/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/bootstrap:
+01-argocd-ingress.yaml
+02-root-app.yaml
+
+$ ls -1 /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/monitoring                         # monitoring configuration
+00-namespace.yaml
+10-prometheus-rbac.yaml
+11-prometheus-config.yaml
+12-prometheus-deployment.yaml
+13-prometheus-service.yaml
+20-grafana-provisioning.yaml
+21-grafana-dashboard.yaml
+22-grafana-deployment.yaml
+23-grafana-service.yaml
+
+---------------------------------------------------------------
+STEP: No credential is committed
+---------------------------------------------------------------
+
+  # A search of every tracked file for the patterns that would matter.
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' grep -nEI '(BEGIN [A-Z ]*PRIVATE KEY|dckr_pat_|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16})' -- . || echo 'no matches - clean'
+scripts/02_repository.sh:32:run "git -C '$ROOT' grep -nEI '(BEGIN [A-Z ]*PRIVATE KEY|dckr_pat_|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16})' -- . || echo 'no matches - clean'"
+
+  # The only Secret manifest in the repository is a template with a
+
+  # placeholder, and it is the file .gitignore explicitly allows through.
+
+$ grep -n 'REPLACE_ME' /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/k8s/21-api-secret.example.yaml
+grep: /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/k8s/21-api-secret.example.yaml: No such file or directory
+[exit status: 2]
+
+$ cat /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/.gitignore
+# Never commit credentials. The assignment's security rules forbid kubeconfig
+# files, tokens, keys and secret values - and in a GitOps repository the stakes
+# are higher than usual, because this repository is applied to a cluster
+# automatically.
+kubeconfig
+*.kubeconfig
+.kube/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+**/secrets/
+
+# Secret manifests, with one deliberate exception: the template that carries a
+# placeholder and documents why the real value is created outside Git.
+*secret*.yaml
+!k8s/21-api-secret.example.yaml
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
+.vscode/
+
+---------------------------------------------------------------
+STEP: What Argo CD is actually reading
+---------------------------------------------------------------
+
+$ argo app get cse644-platform -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['spec']['source']; print(a['repoURL'], 'path', a['path'], 'branch', a['targetRevision'])"
+https://github.com/0luioiul0/cse644-gitops.git path k8s branch main
+
+$ kargo get application cse644-root cse644-platform cse644-monitoring -o custom-columns='APP:.metadata.name,PATH:.spec.source.path,REVISION:.status.sync.revision,SYNC:.status.sync.status,HEALTH:.status.health.status'
+APP                 PATH          REVISION                                   SYNC     HEALTH
+cse644-root         gitops/apps   e639fafebe179332584398d4c89d6ef4ba33d2f6   Synced   Healthy
+cse644-platform     k8s           e639fafebe179332584398d4c89d6ef4ba33d2f6   Synced   Healthy
+cse644-monitoring   monitoring    e639fafebe179332584398d4c89d6ef4ba33d2f6   Synced   Healthy
+
+===============================================================
+ done: 2026-08-09 22:31:23 UTC
+===============================================================

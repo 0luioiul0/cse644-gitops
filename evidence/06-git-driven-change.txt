@@ -1,0 +1,278 @@
+===============================================================
+ CSE644 Assignment 03 - 06-git-driven-change
+ date       : 2026-08-09 23:05:47 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : 63143c6
+===============================================================
+
+---------------------------------------------------------------
+STEP: Before: what is running now
+---------------------------------------------------------------
+
+$ ing web.gitops.local http://localhost:8090/message
+Customized Nginx, deployed from Git by Argo CD.
+
+$ kn get pods -l app.kubernetes.io/name=web -o custom-columns='POD:.metadata.name,AGE:.metadata.creationTimestamp,REV:.metadata.annotations.cse644\.dev/config-revision'
+POD                    AGE                    REV
+web-7887d898d9-29sjb   2026-08-09T23:04:55Z   1
+web-7887d898d9-fljcv   2026-08-09T23:04:54Z   1
+web-7887d898d9-wghjd   2026-08-09T23:04:52Z   1
+
+$ kn get configmap web-config -o jsonpath='{.data.APP_MESSAGE}'; echo
+Customized Nginx, deployed from Git by Argo CD.
+
+$ argo app get cse644-platform --refresh -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['status']; print('sync:', a['sync']['status'], a['sync']['revision'][:8], '| health:', a['health']['status'])"
+sync: Synced 63143c6e | health: Healthy
+
+---------------------------------------------------------------
+STEP: COMMIT 1 - change only the ConfigMap
+---------------------------------------------------------------
+
+$ sed -i 's|^  APP_MESSAGE: .*|  APP_MESSAGE: "Customized Nginx, reconciled from Git by Argo CD (config revision 2)."|' '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/k8s/10-web-configmap.yaml'
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' diff --stat
+ apps/api/app.py           | 19 +++++++++++++++++--
+ k8s/10-web-configmap.yaml |  2 +-
+ 2 files changed, 18 insertions(+), 3 deletions(-)
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' diff -- k8s/10-web-configmap.yaml
+diff --git a/k8s/10-web-configmap.yaml b/k8s/10-web-configmap.yaml
+index e56577d..e547c39 100644
+--- a/k8s/10-web-configmap.yaml
++++ b/k8s/10-web-configmap.yaml
+@@ -17,5 +17,5 @@ metadata:
+     app.kubernetes.io/name: web
+     app.kubernetes.io/part-of: cse644-assignment-03
+ data:
+-  APP_MESSAGE: "Customized Nginx, deployed from Git by Argo CD."
++  APP_MESSAGE: "Customized Nginx, reconciled from Git by Argo CD (config revision 2)."
+   APP_ENV: "development"
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' add k8s/10-web-configmap.yaml
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' commit -m 'Change the web message through the ConfigMap only'
+[main fcb0751] Change the web message through the ConfigMap only
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+  # PUSH_MODE=external: this shell cannot authenticate to GitHub,
+
+  # so the commit is delivered to origin by tooling outside it.
+
+  # origin/main is now fcb07516 - the controller can fetch it
+[23:05:52] waiting for Argo CD to observe fcb07516
+
+$ argo app get cse644-platform --refresh >/dev/null
+[23:05:54] observed
+
+---------------------------------------------------------------
+STEP: Argo CD says Synced and Healthy
+---------------------------------------------------------------
+
+$ argo app get cse644-platform -o json | python3 -c "import json,sys; a=json.load(sys.stdin)['status']; print('sync:', a['sync']['status'], a['sync']['revision'][:8], '| health:', a['health']['status'])"
+sync: Synced fcb07516 | health: Healthy
+
+$ kn get configmap web-config -o jsonpath='{.data.APP_MESSAGE}'; echo '   <- the cluster does match Git'
+Customized Nginx, reconciled from Git by Argo CD (config revision 2).   <- the cluster does match Git
+
+---------------------------------------------------------------
+STEP: And the application has not changed
+---------------------------------------------------------------
+
+$ ing web.gitops.local http://localhost:8090/message
+Customized Nginx, deployed from Git by Argo CD.
+
+$ kn get pods -l app.kubernetes.io/name=web -o custom-columns='POD:.metadata.name,START:.status.startTime'
+POD                    START
+web-7887d898d9-29sjb   2026-08-09T23:04:55Z
+web-7887d898d9-fljcv   2026-08-09T23:04:54Z
+web-7887d898d9-wghjd   2026-08-09T23:04:52Z
+
+  # Same Pods, same start times, same page. envFrom reads a ConfigMap once,
+
+  # at container start. Argo CD updated the object it was asked to update and
+
+  # correctly reports success - it has no way to know that this particular
+
+  # object is only read at boot. Nothing here is broken; the manifest simply
+
+  # did not ask for a restart.
+
+---------------------------------------------------------------
+STEP: COMMIT 2 - bump the Pod template annotation
+---------------------------------------------------------------
+
+  # Changing anything inside spec.template changes the Pod template hash,
+
+  # which creates a new ReplicaSet, which rolls the fleet. The annotation
+
+  # carries no meaning to Kubernetes; its only job is to be different.
+
+$ sed -i 's|cse644.dev/config-revision: "1"|cse644.dev/config-revision: "2"|' '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/k8s/11-web-deployment.yaml'
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' diff -- k8s/11-web-deployment.yaml
+diff --git a/k8s/11-web-deployment.yaml b/k8s/11-web-deployment.yaml
+index 5da45eb..f3496d9 100644
+--- a/k8s/11-web-deployment.yaml
++++ b/k8s/11-web-deployment.yaml
+@@ -53,7 +53,7 @@ spec:
+         # scripts/05_git_driven_change.sh demonstrates both halves: one commit
+         # that edits only the ConfigMap and visibly does nothing, then one that
+         # bumps this value and rolls the fleet.
+-        cse644.dev/config-revision: "1"
++        cse644.dev/config-revision: "2"
+     spec:
+       # Spread replicas over nodes where possible, so "multiple running
+       # instances" is not three Pods on one machine.
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' add k8s/11-web-deployment.yaml
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' commit -m 'Roll the web Deployment so it picks up config revision 2'
+[main da98caf] Roll the web Deployment so it picks up config revision 2
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+  # PUSH_MODE=external: this shell cannot authenticate to GitHub,
+
+  # so the commit is delivered to origin by tooling outside it.
+
+  # origin/main is now da98caf0 - the controller can fetch it
+[23:05:59] waiting for Argo CD to observe da98caf0
+[23:06:10] observed - watching the rollout
+
+$ kn rollout status deploy/web --timeout=180s
+Waiting for deployment "web" rollout to finish: 2 out of 3 new replicas have been updated...
+Waiting for deployment "web" rollout to finish: 2 out of 3 new replicas have been updated...
+Waiting for deployment "web" rollout to finish: 2 out of 3 new replicas have been updated...
+Waiting for deployment "web" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "web" rollout to finish: 1 old replicas are pending termination...
+deployment "web" successfully rolled out
+
+---------------------------------------------------------------
+STEP: Now the application has changed
+---------------------------------------------------------------
+
+$ ing web.gitops.local http://localhost:8090/message
+Customized Nginx, reconciled from Git by Argo CD (config revision 2).
+
+$ kn get pods -l app.kubernetes.io/name=web -o custom-columns='POD:.metadata.name,START:.status.startTime,REV:.metadata.annotations.cse644\.dev/config-revision'
+POD                    START                  REV
+web-6cc5f8b998-7lxqj   2026-08-09T23:06:12Z   2
+web-6cc5f8b998-8cp4r   2026-08-09T23:06:10Z   2
+web-6cc5f8b998-s4krw   2026-08-09T23:06:09Z   2
+
+$ kn get rs -l app.kubernetes.io/name=web -o custom-columns='REPLICASET:.metadata.name,DESIRED:.spec.replicas,CURRENT:.status.replicas'
+REPLICASET       DESIRED   CURRENT
+web-6cc5f8b998   3         3
+web-7887d898d9   0         0
+
+  # maxUnavailable: 0 means the old replicas kept serving until the new ones
+
+  # were ready. No request was dropped to change a public message.
+
+---------------------------------------------------------------
+STEP: COMMIT 3 - move the api workload to a new image version
+---------------------------------------------------------------
+
+$ ing api.gitops.local http://localhost:8090/metrics | grep -e '^cse644_api_build_info' -e '^cse644_api_notes_bytes' || true
+cse644_api_build_info{version="1.0.0",app_env="development"} 1
+
+$ sed -i 's|luioiul/cse644-gitops-api:1.0.0|luioiul/cse644-gitops-api:1.1.0|' '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/k8s/23-api-deployment.yaml'
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' diff -- k8s/23-api-deployment.yaml
+diff --git a/k8s/23-api-deployment.yaml b/k8s/23-api-deployment.yaml
+index d95f18b..1305c75 100644
+--- a/k8s/23-api-deployment.yaml
++++ b/k8s/23-api-deployment.yaml
+@@ -65,7 +65,7 @@ spec:
+             claimName: api-data
+       containers:
+         - name: api
+-          image: docker.io/luioiul/cse644-gitops-api:1.0.0
++          image: docker.io/luioiul/cse644-gitops-api:1.1.0
+           imagePullPolicy: IfNotPresent
+           ports:
+             - name: http
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' add k8s/23-api-deployment.yaml apps/api/app.py
+
+$ git -C '/mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops' commit -m 'Deploy api 1.1.0'
+[main 63c0f9b] Deploy api 1.1.0
+ 2 files changed, 18 insertions(+), 3 deletions(-)
+
+  # PUSH_MODE=external: this shell cannot authenticate to GitHub,
+
+  # so the commit is delivered to origin by tooling outside it.
+
+  # origin/main is now 63c0f9bc - the controller can fetch it
+[23:06:23] waiting for Argo CD to observe 63c0f9bc
+[23:06:33] observed - watching the rollout
+
+$ kn rollout status deploy/api --timeout=240s
+Waiting for deployment "api" rollout to finish: 0 out of 1 new replicas have been updated...
+Waiting for deployment "api" rollout to finish: 0 out of 1 new replicas have been updated...
+Waiting for deployment "api" rollout to finish: 0 of 1 updated replicas are available...
+deployment "api" successfully rolled out
+
+  # rollout status returns as soon as the Pod reports Ready. The ingress
+
+  # controller still has to observe the new EndpointSlice before it has an
+
+  # upstream to send to, so requests in that gap get a 503 from nginx, not
+
+  # from the application. With strategy: Recreate there is no old Pod left
+
+  # to absorb them - the gap is a real, if short, outage. So wait for the
+
+  # entry point rather than assume the rollout implies it.
+[23:07:13] waiting for the ingress to route to the new Pod
+[23:07:14] entry point is serving
+
+---------------------------------------------------------------
+STEP: The new version is live, and it brought a new metric with it
+---------------------------------------------------------------
+
+$ ing api.gitops.local http://localhost:8090/api/info | python3 -c "import json,sys; d=json.load(sys.stdin); print('version:', d['version'], '| pod:', d['pod'])"
+version: 1.1.0 | pod: api-5d9db79cfb-2pf9t
+
+$ ing api.gitops.local -D - -o /dev/null http://localhost:8090/ | grep -i x-app-version
+X-App-Version: 1.1.0
+
+$ ing api.gitops.local http://localhost:8090/metrics | grep -e '^cse644_api_build_info' -e '^cse644_api_notes_bytes'
+cse644_api_build_info{version="1.1.0",app_env="development"} 1
+cse644_api_notes_bytes 88
+
+  # The image tag in Git, the OCI label on the image, and the value the
+
+  # process reports all say 1.1.0. APP_VERSION is baked in at build
+
+  # time and never set in a manifest, so those three cannot drift apart.
+
+---------------------------------------------------------------
+STEP: The volume outlived the Pod
+---------------------------------------------------------------
+
+$ ing api.gitops.local http://localhost:8090/api/notes
+{
+  "notes": [
+    "2026-08-09T22:31:24Z  pod=api-797b89d7f9-rkq4l  deployed by Argo CD from commit e639faf"
+  ]
+}
+
+  # Notes written by the previous version's Pod, read by the new one.
+
+---------------------------------------------------------------
+STEP: Argo CD's own history of what it deployed
+---------------------------------------------------------------
+
+$ argo app history cse644-platform
+SOURCE  https://github.com/0luioiul0/cse644-gitops.git
+ID      DATE                           REVISION
+7       2026-08-09 16:04:52 -0700 PDT  main (63143c6)
+8       2026-08-09 16:05:22 -0700 PDT  main (63143c6)
+9       2026-08-09 16:05:53 -0700 PDT  main (fcb0751)
+10      2026-08-09 16:06:09 -0700 PDT  main (da98caf)
+11      2026-08-09 16:06:33 -0700 PDT  main (63c0f9b)
+
+===============================================================
+ done: 2026-08-09 23:07:15 UTC
+===============================================================

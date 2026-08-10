@@ -1,0 +1,162 @@
+===============================================================
+ CSE644 Assignment 03 - 01-cluster
+ date       : 2026-08-09 10:16:25 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : aeb0ec2
+===============================================================
+
+---------------------------------------------------------------
+STEP: Client and cluster versions
+---------------------------------------------------------------
+
+$ kubectl version --client=true
+Client Version: v1.36.3
+Kustomize Version: v5.8.1
+
+$ kind version
+kind v0.30.0 go1.24.6 linux/amd64
+
+$ k version -o yaml | sed -n '1,40p'
+Warning: version difference between client (1.36) and server (1.34) exceeds the supported minor version skew of +/-1
+clientVersion:
+  buildDate: "2026-07-22T18:10:35Z"
+  compiler: gc
+  gitCommit: 0f29094e5b73085e3802ecc1298ecae13866bfe6
+  gitTreeState: clean
+  gitVersion: v1.36.3
+  goVersion: go1.26.5
+  major: "1"
+  minor: "36"
+  platform: linux/amd64
+kustomizeVersion: v5.8.1
+serverVersion:
+  buildDate: "2025-08-27T10:09:04Z"
+  compiler: gc
+  emulationMajor: "1"
+  emulationMinor: "34"
+  gitCommit: f28b4c9efbca5c5c0af716d9f2d5702667ee8a45
+  gitTreeState: clean
+  gitVersion: v1.34.0
+  goVersion: go1.24.6
+  major: "1"
+  minCompatibilityMajor: "1"
+  minCompatibilityMinor: "33"
+  minor: "34"
+  platform: linux/amd64
+
+
+---------------------------------------------------------------
+STEP: Nodes
+---------------------------------------------------------------
+
+$ k get nodes -o wide
+NAME                   STATUS   ROLES           AGE   VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                         KERNEL-VERSION                     CONTAINER-RUNTIME
+cse644-control-plane   Ready    control-plane   27h   v1.34.0   172.21.0.2    <none>        Debian GNU/Linux 12 (bookworm)   6.6.87.2-microsoft-standard-WSL2   containerd://2.1.3
+cse644-worker          Ready    <none>          27h   v1.34.0   172.21.0.3    <none>        Debian GNU/Linux 12 (bookworm)   6.6.87.2-microsoft-standard-WSL2   containerd://2.1.3
+cse644-worker2         Ready    <none>          27h   v1.34.0   172.21.0.4    <none>        Debian GNU/Linux 12 (bookworm)   6.6.87.2-microsoft-standard-WSL2   containerd://2.1.3
+
+---------------------------------------------------------------
+STEP: The control plane answers
+---------------------------------------------------------------
+
+$ k cluster-info
+Kubernetes control plane is running at https://127.0.0.1:33613
+CoreDNS is running at https://127.0.0.1:33613/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+
+To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.
+
+$ k get --raw /readyz?verbose | tail -20
+[+]poststarthook/start-kube-apiserver-identity-lease-garbage-collector ok
+[+]poststarthook/start-legacy-token-tracking-controller ok
+[+]poststarthook/start-service-ip-repair-controllers ok
+[+]poststarthook/rbac/bootstrap-roles ok
+[+]poststarthook/scheduling/bootstrap-system-priority-classes ok
+[+]poststarthook/priority-and-fairness-config-producer ok
+[+]poststarthook/bootstrap-controller ok
+[+]poststarthook/start-kubernetes-service-cidr-controller ok
+[+]poststarthook/aggregator-reload-proxy-client-cert ok
+[+]poststarthook/start-kube-aggregator-informers ok
+[+]poststarthook/apiservice-status-local-available-controller ok
+[+]poststarthook/apiservice-status-remote-available-controller ok
+[+]poststarthook/apiservice-registration-controller ok
+[+]poststarthook/apiservice-discovery-controller ok
+[+]poststarthook/kube-apiserver-autoregistration ok
+[+]autoregister-completion ok
+[+]poststarthook/apiservice-openapi-controller ok
+[+]poststarthook/apiservice-openapiv3-controller ok
+[+]shutdown ok
+readyz check passed
+
+---------------------------------------------------------------
+STEP: Shared cluster add-ons (installed for Assignment 02, not by this repository)
+---------------------------------------------------------------
+
+$ k get pods -n ingress-nginx -o wide
+NAME                                        READY   STATUS    RESTARTS       AGE   IP           NODE                   NOMINATED NODE   READINESS GATES
+ingress-nginx-controller-686b784c7c-fs9w8   1/1     Running   70 (32s ago)   26h   10.244.0.2   cse644-control-plane   <none>           <none>
+
+$ k get pods -n metallb-system -o wide
+NAME                          READY   STATUS    RESTARTS       AGE   IP           NODE                   NOMINATED NODE   READINESS GATES
+controller-6599cd9c46-98qnl   1/1     Running   83 (32s ago)   27h   10.244.2.2   cse644-worker2         <none>           <none>
+speaker-7qbxt                 0/1     Running   85 (32s ago)   27h   172.21.0.3   cse644-worker          <none>           <none>
+speaker-kb4qd                 1/1     Running   83 (32s ago)   27h   172.21.0.2   cse644-control-plane   <none>           <none>
+speaker-zmdtr                 0/1     Running   84 (32s ago)   27h   172.21.0.4   cse644-worker2         <none>           <none>
+
+$ k get ingressclass
+NAME    CONTROLLER             PARAMETERS   AGE
+nginx   k8s.io/ingress-nginx   <none>       27h
+
+$ k get storageclass
+NAME                 PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+standard (default)   rancher.io/local-path   Delete          WaitForFirstConsumer   false                  27h
+
+---------------------------------------------------------------
+STEP: Host entry point
+---------------------------------------------------------------
+
+  # kind/cluster.yaml in the Assignment 02 repository maps host port 8090 to
+
+  # port 80 of the control-plane node, where the ingress controller listens.
+
+  # Everything in this assignment is reached through that one port, routed
+
+  # by Host header.
+
+$ docker port cse644-control-plane
+80/tcp -> 0.0.0.0:8090
+443/tcp -> 0.0.0.0:8453
+6443/tcp -> 127.0.0.1:33613
+30080/tcp -> 0.0.0.0:30080
+
+---------------------------------------------------------------
+STEP: What is already on this cluster before Assignment 03 is deployed
+---------------------------------------------------------------
+
+$ k get ns
+NAME                 STATUS   AGE
+cse644               Active   26h
+default              Active   27h
+ingress-nginx        Active   27h
+kube-node-lease      Active   27h
+kube-public          Active   27h
+kube-system          Active   27h
+local-path-storage   Active   27h
+metallb-system       Active   27h
+
+$ k get pods -A -o wide | grep -v -e kube-system -e local-path
+NAMESPACE            NAME                                           READY   STATUS    RESTARTS        AGE   IP           NODE                   NOMINATED NODE   READINESS GATES
+cse644               api-d4c57c99f-gl929                            1/1     Running   70 (32s ago)    26h   10.244.1.5   cse644-worker          <none>           <none>
+cse644               haproxy-9bcb599f7-6nphd                        1/1     Running   68 (32s ago)    26h   10.244.1.2   cse644-worker          <none>           <none>
+cse644               web-5656d9c94-7v55p                            1/1     Running   69 (32s ago)    26h   10.244.2.3   cse644-worker2         <none>           <none>
+cse644               web-5656d9c94-q5dz2                            1/1     Running   71 (32s ago)    26h   10.244.1.4   cse644-worker          <none>           <none>
+cse644               web-5656d9c94-rt2rp                            1/1     Running   70 (32s ago)    26h   10.244.1.3   cse644-worker          <none>           <none>
+ingress-nginx        ingress-nginx-controller-686b784c7c-fs9w8      1/1     Running   70 (32s ago)    26h   10.244.0.2   cse644-control-plane   <none>           <none>
+metallb-system       controller-6599cd9c46-98qnl                    1/1     Running   83 (32s ago)    27h   10.244.2.2   cse644-worker2         <none>           <none>
+metallb-system       speaker-7qbxt                                  0/1     Running   85 (32s ago)    27h   172.21.0.3   cse644-worker          <none>           <none>
+metallb-system       speaker-kb4qd                                  1/1     Running   83 (32s ago)    27h   172.21.0.2   cse644-control-plane   <none>           <none>
+metallb-system       speaker-zmdtr                                  0/1     Running   84 (32s ago)    27h   172.21.0.4   cse644-worker2         <none>           <none>
+
+===============================================================
+ done: 2026-08-09 10:16:27 UTC
+===============================================================

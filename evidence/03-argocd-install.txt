@@ -1,0 +1,233 @@
+===============================================================
+ CSE644 Assignment 03 - 03-argocd-install
+ date       : 2026-08-09 22:18:27 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : aeb0ec2
+===============================================================
+
+---------------------------------------------------------------
+STEP: Install the Argo CD CLI (per-user, no root)
+---------------------------------------------------------------
+
+  # argocd v3.5.0 already present
+
+$ argocd version --client --short
+argocd: v3.5.0+e95e1be
+
+---------------------------------------------------------------
+STEP: Create the argocd namespace and apply the pinned upstream install manifest
+---------------------------------------------------------------
+
+$ k create namespace argocd --dry-run=client -o yaml | k apply -f -
+namespace/argocd created
+
+  # --server-side is required, not a preference. A client-side apply records
+
+  # the whole submitted object in a last-applied-configuration annotation, and
+
+  # annotations are capped at 262144 bytes; the applicationsets.argoproj.io CRD
+
+  # carries a schema larger than that, so a plain apply fails on that one object
+
+  # with 'metadata.annotations: Too long'. Server-side apply keeps field
+
+  # ownership in managedFields instead of an annotation and has no such limit.
+
+$ k apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.0/manifests/install.yaml
+Warning: unrecognized format "int64"
+customresourcedefinition.apiextensions.k8s.io/applications.argoproj.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/applicationsets.argoproj.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/appprojects.argoproj.io serverside-applied
+serviceaccount/argocd-application-controller serverside-applied
+serviceaccount/argocd-applicationset-controller serverside-applied
+serviceaccount/argocd-dex-server serverside-applied
+serviceaccount/argocd-notifications-controller serverside-applied
+serviceaccount/argocd-redis serverside-applied
+serviceaccount/argocd-repo-server serverside-applied
+serviceaccount/argocd-server serverside-applied
+role.rbac.authorization.k8s.io/argocd-application-controller serverside-applied
+role.rbac.authorization.k8s.io/argocd-applicationset-controller serverside-applied
+role.rbac.authorization.k8s.io/argocd-dex-server serverside-applied
+role.rbac.authorization.k8s.io/argocd-notifications-controller serverside-applied
+role.rbac.authorization.k8s.io/argocd-redis serverside-applied
+role.rbac.authorization.k8s.io/argocd-server serverside-applied
+clusterrole.rbac.authorization.k8s.io/argocd-application-controller serverside-applied
+clusterrole.rbac.authorization.k8s.io/argocd-applicationset-controller serverside-applied
+clusterrole.rbac.authorization.k8s.io/argocd-server serverside-applied
+rolebinding.rbac.authorization.k8s.io/argocd-application-controller serverside-applied
+rolebinding.rbac.authorization.k8s.io/argocd-applicationset-controller serverside-applied
+rolebinding.rbac.authorization.k8s.io/argocd-dex-server serverside-applied
+rolebinding.rbac.authorization.k8s.io/argocd-notifications-controller serverside-applied
+rolebinding.rbac.authorization.k8s.io/argocd-redis serverside-applied
+rolebinding.rbac.authorization.k8s.io/argocd-server serverside-applied
+clusterrolebinding.rbac.authorization.k8s.io/argocd-application-controller serverside-applied
+clusterrolebinding.rbac.authorization.k8s.io/argocd-applicationset-controller serverside-applied
+clusterrolebinding.rbac.authorization.k8s.io/argocd-server serverside-applied
+configmap/argocd-cm serverside-applied
+configmap/argocd-cmd-params-cm serverside-applied
+configmap/argocd-gpg-keys-cm serverside-applied
+configmap/argocd-notifications-cm serverside-applied
+configmap/argocd-rbac-cm serverside-applied
+configmap/argocd-ssh-known-hosts-cm serverside-applied
+configmap/argocd-tls-certs-cm serverside-applied
+secret/argocd-notifications-secret serverside-applied
+secret/argocd-secret serverside-applied
+service/argocd-applicationset-controller serverside-applied
+service/argocd-dex-server serverside-applied
+service/argocd-metrics serverside-applied
+service/argocd-notifications-controller-metrics serverside-applied
+service/argocd-redis serverside-applied
+service/argocd-repo-server serverside-applied
+service/argocd-server serverside-applied
+service/argocd-server-metrics serverside-applied
+deployment.apps/argocd-applicationset-controller serverside-applied
+deployment.apps/argocd-dex-server serverside-applied
+deployment.apps/argocd-notifications-controller serverside-applied
+deployment.apps/argocd-redis serverside-applied
+deployment.apps/argocd-repo-server serverside-applied
+deployment.apps/argocd-server serverside-applied
+statefulset.apps/argocd-application-controller serverside-applied
+networkpolicy.networking.k8s.io/argocd-application-controller-network-policy serverside-applied
+networkpolicy.networking.k8s.io/argocd-applicationset-controller-network-policy serverside-applied
+networkpolicy.networking.k8s.io/argocd-dex-server-network-policy serverside-applied
+networkpolicy.networking.k8s.io/argocd-notifications-controller-network-policy serverside-applied
+networkpolicy.networking.k8s.io/argocd-redis-network-policy serverside-applied
+networkpolicy.networking.k8s.io/argocd-repo-server-network-policy serverside-applied
+networkpolicy.networking.k8s.io/argocd-server-network-policy serverside-applied
+
+---------------------------------------------------------------
+STEP: Wait for the control plane to come up
+---------------------------------------------------------------
+
+$ k -n argocd rollout status deploy/argocd-server --timeout=300s
+Waiting for deployment "argocd-server" rollout to finish: 0 of 1 updated replicas are available...
+deployment "argocd-server" successfully rolled out
+
+$ k -n argocd rollout status deploy/argocd-repo-server --timeout=300s
+deployment "argocd-repo-server" successfully rolled out
+
+$ k -n argocd rollout status statefulset/argocd-application-controller --timeout=300s
+partitioned roll out complete: 1 new pods have been updated...
+
+$ kargo get pods -o wide
+NAME                                               READY   STATUS    RESTARTS   AGE   IP            NODE             NOMINATED NODE   READINESS GATES
+argocd-application-controller-0                    1/1     Running   0          32s   10.244.1.13   cse644-worker    <none>           <none>
+argocd-applicationset-controller-796d8b8cf-96v99   1/1     Running   0          32s   10.244.1.10   cse644-worker    <none>           <none>
+argocd-dex-server-b9656df4-n448j                   1/1     Running   0          32s   10.244.2.7    cse644-worker2   <none>           <none>
+argocd-notifications-controller-cb56676db-mrcrn    1/1     Running   0          32s   10.244.1.11   cse644-worker    <none>           <none>
+argocd-redis-79f95f84b6-lfzws                      1/1     Running   0          32s   10.244.1.12   cse644-worker    <none>           <none>
+argocd-repo-server-c557dfd7b-mfrzv                 1/1     Running   0          32s   10.244.2.8    cse644-worker2   <none>           <none>
+argocd-server-7c97f7db8d-kss6x                     1/1     Running   0          32s   10.244.2.9    cse644-worker2   <none>           <none>
+
+---------------------------------------------------------------
+STEP: Serve the UI over plain HTTP behind the ingress controller
+---------------------------------------------------------------
+
+  # argocd-server terminates TLS itself by default and redirects HTTP to
+
+  # HTTPS. Behind an ingress that also handles TLS the result is a redirect
+
+  # loop. server.insecure=true hands TLS termination to the ingress - which
+
+  # on this local cluster means plain HTTP on localhost, a limitation of the
+
+  # environment that is recorded in the README rather than hidden.
+
+$ kargo patch configmap argocd-cmd-params-cm --type merge -p '{"data":{"server.insecure":"true"}}'
+configmap/argocd-cmd-params-cm patched
+
+---------------------------------------------------------------
+STEP: Read-only anonymous access to the UI
+---------------------------------------------------------------
+
+  # So the dashboard and application tree can be screenshotted and reviewed
+
+  # without a password existing anywhere in this repository or in these
+
+  # transcripts. The default role is readonly: an anonymous visitor can look
+
+  # at everything and change nothing. This is acceptable because the cluster
+
+  # listens on localhost only; it would not be on a reachable network.
+
+$ kargo patch configmap argocd-cm --type merge -p '{"data":{"users.anonymous.enabled":"true"}}'
+configmap/argocd-cm patched
+
+$ kargo patch configmap argocd-rbac-cm --type merge -p '{"data":{"policy.default":"role:readonly"}}'
+configmap/argocd-rbac-cm patched
+
+$ kargo rollout restart deploy/argocd-server
+deployment.apps/argocd-server restarted
+
+$ k -n argocd rollout status deploy/argocd-server --timeout=300s
+Waiting for deployment "argocd-server" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "argocd-server" rollout to finish: 1 old replicas are pending termination...
+deployment "argocd-server" successfully rolled out
+
+---------------------------------------------------------------
+STEP: Expose it on the shared ingress controller
+---------------------------------------------------------------
+
+$ k apply -f /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/gitops/bootstrap/01-argocd-ingress.yaml
+ingress.networking.k8s.io/argocd-server created
+
+$ kargo get ingress
+NAME            CLASS   HOSTS                 ADDRESS   PORTS   AGE
+argocd-server   nginx   argocd.gitops.local             80      0s
+
+$ ing argocd.gitops.local -o /dev/null -w 'GET http://argocd.gitops.local:8090/ -> HTTP %{http_code}\n' http://localhost:8090/
+GET http://argocd.gitops.local:8090/ -> HTTP 200
+
+---------------------------------------------------------------
+STEP: The CLI talks to the Kubernetes API directly
+---------------------------------------------------------------
+
+  # --core means the CLI uses the kubeconfig rather than logging in to
+
+  # argocd-server, so no session token and no password appear in any of
+
+  # these transcripts. Core mode takes its namespace from the kube context,
+
+  # and needs to find argocd-cm - hence a second context pointing at the same
+
+  # cluster with the namespace set. The current context is not changed.
+
+$ kubectl config set-context argocd-core --cluster=kind-cse644 --user=kind-cse644 --namespace=argocd
+Context "argocd-core" modified.
+
+$ kubectl config get-contexts
+CURRENT   NAME          CLUSTER       AUTHINFO      NAMESPACE
+          argocd-core   kind-cse644   kind-cse644   argocd
+*         kind-cse644   kind-cse644   kind-cse644   
+
+$ argo version --short
+argocd: v3.5.0+e95e1be
+argocd-server: v3.5.0+e95e1be
+
+$ argo app list
+NAME  CLUSTER  NAMESPACE  PROJECT  STATUS  HEALTH  SYNCPOLICY  CONDITIONS  REPO  PATH  TARGET
+
+---------------------------------------------------------------
+STEP: The initial admin Secret still exists and is left alone
+---------------------------------------------------------------
+
+  # kubectl describe prints a Secret's key names and byte counts, never its
+
+  # values. The admin password is not read, decoded or used anywhere in this
+
+  # repository - --core mode means nothing needs it.
+
+$ kargo describe secret argocd-initial-admin-secret | tail -8
+Labels:       <none>
+Annotations:  <none>
+
+Type:  Opaque
+
+Data
+====
+password:  16 bytes
+
+===============================================================
+ done: 2026-08-09 22:19:38 UTC
+===============================================================

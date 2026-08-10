@@ -1,0 +1,182 @@
+===============================================================
+ CSE644 Assignment 03 - 00-image-build-and-push-1.2.0
+ date       : 2026-08-09 23:56:59 UTC
+ cluster    : kind/cse644   (kubectl context kind-cse644)
+ repository : https://github.com/0luioiul0/cse644-gitops
+ revision   : 5908488
+===============================================================
+
+---------------------------------------------------------------
+STEP: Docker engine and registry identity
+---------------------------------------------------------------
+
+$ docker version --format 'client {{.Client.Version}} / server {{.Server.Version}}'
+client 29.1.3 / server 29.1.3
+
+$ docker system info --format '{{.Username}}' | sed 's/^/logged in to Docker Hub as: /'
+template: :1:2: executing "" at <.Username>: can't evaluate field Username in type system.dockerInfo
+logged in to Docker Hub as: 
+[exit status: 1]
+
+  # building: api   at tag: 1.2.0
+
+---------------------------------------------------------------
+STEP: Build luioiul/cse644-gitops-api:1.2.0
+---------------------------------------------------------------
+
+$ docker build --build-arg APP_VERSION=1.2.0 -t luioiul/cse644-gitops-api:1.2.0 /mnt/c/Users/zhang/OneDrive/Desktop/cse644-gitops/apps/api
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  27.14kB
+Step 1/10 : FROM python:3.12.13-alpine
+ ---> 6d43704baacd
+Step 2/10 : ARG APP_VERSION=0.0.0-dev
+ ---> Using cache
+ ---> c84706e68ca4
+Step 3/10 : LABEL org.opencontainers.image.title="cse644-gitops-api"       org.opencontainers.image.description="Instrumented Python workload on port 8888 for CSE644 Assignment 03"       org.opencontainers.image.version="${APP_VERSION}"       org.opencontainers.image.source="https://github.com/0luioiul0/cse644-gitops"       course="CSE644 Cloud Computing"
+ ---> Running in 05c286eda66c
+ ---> Removed intermediate container 05c286eda66c
+ ---> 3766f816a05f
+Step 4/10 : ENV PORT=8888     DATA_DIR=/data     APP_VERSION=${APP_VERSION}     PYTHONUNBUFFERED=1     PYTHONDONTWRITEBYTECODE=1
+ ---> Running in f9a80af5a26e
+ ---> Removed intermediate container f9a80af5a26e
+ ---> ddfb82d5cebb
+Step 5/10 : WORKDIR /app
+ ---> Running in 29136f752395
+ ---> Removed intermediate container 29136f752395
+ ---> 52cc1507a748
+Step 6/10 : COPY app.py .
+ ---> 29d706f74345
+Step 7/10 : RUN adduser -D -u 10001 appuser  && mkdir -p /data  && chown -R appuser:appuser /app /data
+ ---> Running in 86de9eba79b7
+ ---> Removed intermediate container 86de9eba79b7
+ ---> 44cceff375a7
+Step 8/10 : USER 10001
+ ---> Running in 8098b4bc188a
+ ---> Removed intermediate container 8098b4bc188a
+ ---> b30796ee6792
+Step 9/10 : EXPOSE 8888
+ ---> Running in 4aef651483c5
+ ---> Removed intermediate container 4aef651483c5
+ ---> 2a87eac228a0
+Step 10/10 : CMD ["python", "app.py"]
+ ---> Running in e484a0f95c8c
+ ---> Removed intermediate container e484a0f95c8c
+ ---> aa462ae16d0f
+Successfully built aa462ae16d0f
+Successfully tagged luioiul/cse644-gitops-api:1.2.0
+
+---------------------------------------------------------------
+STEP: The version is baked in, not configured
+---------------------------------------------------------------
+
+  # The manifests never set APP_VERSION. It comes from the image, so what
+
+  # the running application reports cannot disagree with what was deployed.
+
+$ docker run --rm luioiul/cse644-gitops-api:1.2.0 python -c "import os; print('APP_VERSION in image =', os.environ['APP_VERSION'])"
+APP_VERSION in image = 1.2.0
+
+---------------------------------------------------------------
+STEP: Push to Docker Hub
+---------------------------------------------------------------
+
+$ docker push luioiul/cse644-gitops-api:1.2.0
+The push refers to repository [docker.io/luioiul/cse644-gitops-api]
+5c8c3342f086: Waiting
+5297117d6c9b: Waiting
+55167a880c77: Waiting
+bd726b88c664: Waiting
+71475e2f9a6f: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+71475e2f9a6f: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+5c8c3342f086: Waiting
+5297117d6c9b: Waiting
+55167a880c77: Waiting
+bd726b88c664: Waiting
+55167a880c77: Waiting
+bd726b88c664: Waiting
+71475e2f9a6f: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+5c8c3342f086: Waiting
+5297117d6c9b: Waiting
+bd726b88c664: Waiting
+71475e2f9a6f: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+5c8c3342f086: Waiting
+5297117d6c9b: Waiting
+55167a880c77: Waiting
+55167a880c77: Waiting
+bd726b88c664: Waiting
+71475e2f9a6f: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+5c8c3342f086: Waiting
+5297117d6c9b: Waiting
+5c8c3342f086: Waiting
+5297117d6c9b: Waiting
+55167a880c77: Waiting
+bd726b88c664: Waiting
+71475e2f9a6f: Waiting
+55afa1ecc21d: Waiting
+37daa602ac89: Waiting
+5297117d6c9b: Waiting
+55167a880c77: Waiting
+bd726b88c664: Waiting
+71475e2f9a6f: Waiting
+55afa1ecc21d: Layer already exists
+37daa602ac89: Layer already exists
+5c8c3342f086: Waiting
+5c8c3342f086: Waiting
+5297117d6c9b: Waiting
+55167a880c77: Layer already exists
+bd726b88c664: Waiting
+71475e2f9a6f: Waiting
+5c8c3342f086: Waiting
+5297117d6c9b: Waiting
+bd726b88c664: Waiting
+71475e2f9a6f: Layer already exists
+5297117d6c9b: Waiting
+bd726b88c664: Waiting
+bd726b88c664: Waiting
+5c8c3342f086: Pushed
+5297117d6c9b: Pushed
+bd726b88c664: Pushed
+1.2.0: digest: sha256:aa462ae16d0fb8cc1704b668ddfb96ed76bbcbf308823b5875984e6515d6312e size: 1830
+
+---------------------------------------------------------------
+STEP: Confirm the tags resolve from the registry, not from the local daemon
+---------------------------------------------------------------
+
+$ docker manifest inspect docker.io/luioiul/cse644-gitops-api:1.2.0 | head -20
+{
+	"mediaType": "application/vnd.oci.image.manifest.v1+json",
+	"schemaVersion": 2,
+	"config": {
+		"mediaType": "application/vnd.oci.image.config.v1+json",
+		"digest": "sha256:3a38e796b2e92d5c62df45143c49f49eb72f3aaff816de5e3a8b43f0b802c6be",
+		"size": 7661
+	},
+	"layers": [
+		{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest": "sha256:55afa1ecc21d2bb5e5045f32dafee56272ffd89860bac26f6c32123439af26a4",
+			"size": 3846391
+		},
+		{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest": "sha256:37daa602ac89f280ab5b9f9dd12d9ab9df7a0197dd5044850dc1565f354fe3ff",
+			"size": 408740
+		},
+		{
+
+===============================================================
+ done: 2026-08-09 23:57:07 UTC
+===============================================================
