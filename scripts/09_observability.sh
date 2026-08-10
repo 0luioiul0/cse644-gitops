@@ -178,18 +178,26 @@ for s in d:
 "
 }
 
+# Every range below is 6m: the generator runs for 4m30s and the queries start
+# 30s after it ends, so 6m covers the whole workload and nothing before it.
+# That is not a cosmetic choice. These queries first used 15m, which reached
+# back past the start of the run into the previous api Pod - a Pod running the
+# version whose latency instrumentation was broken - and reported the mean
+# latency of /metrics as 8.7s, then 3.6s as the old samples aged out. Both were
+# arithmetic over two different applications. A window that extends beyond the
+# thing being measured silently mixes in whatever came before it.
 q_and_print "request rate by route"  'sum by (route) (rate(cse644_api_requests_total[5m]))'
 q_and_print "responses by status"    'sum by (status) (rate(cse644_api_requests_total[5m]))'
-q_and_print "peak request rate seen" 'max_over_time(sum(rate(cse644_api_requests_total[1m]))[15m:15s])'
-q_and_print "latency p50 / p90 / p99 over the whole run" 'histogram_quantile(0.50, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[15m])))'
-q_and_print "" 'histogram_quantile(0.90, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[15m])))'
-q_and_print "" 'histogram_quantile(0.99, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[15m])))'
-q_and_print "slowest route by mean latency" 'topk(3, sum by (route) (rate(cse644_api_request_duration_seconds_sum[15m])) / sum by (route) (rate(cse644_api_request_duration_seconds_count[15m])))'
-q_and_print "peak concurrency" 'max_over_time(cse644_api_requests_in_flight[15m])' '%.0f'
-q_and_print "5xx ratio over the run" 'sum(rate(cse644_api_requests_total{status=~"5.."}[15m])) / sum(rate(cse644_api_requests_total[15m]))'
+q_and_print "peak request rate seen" 'max_over_time(sum(rate(cse644_api_requests_total[1m]))[6m:15s])'
+q_and_print "latency p50 / p90 / p99 over the whole run" 'histogram_quantile(0.50, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[6m])))'
+q_and_print "" 'histogram_quantile(0.90, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[6m])))'
+q_and_print "" 'histogram_quantile(0.99, sum by (le) (rate(cse644_api_request_duration_seconds_bucket[6m])))'
+q_and_print "slowest route by mean latency" 'topk(4, sum by (route) (rate(cse644_api_request_duration_seconds_sum[6m])) / sum by (route) (rate(cse644_api_request_duration_seconds_count[6m])))'
+q_and_print "peak concurrency" 'max_over_time(cse644_api_requests_in_flight[6m])' '%.0f'
+q_and_print "5xx ratio over the run" 'sum(rate(cse644_api_requests_total{status=~"5.."}[6m])) / sum(rate(cse644_api_requests_total[6m]))'
 q_and_print "notes on the persistent volume" 'cse644_api_notes_stored' '%.0f'
 q_and_print "running version" 'cse644_api_build_info' '%.0f'
-q_and_print "peak container CPU, cse644-gitops namespace" 'max_over_time(sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="cse644-gitops"}[2m]))[15m:30s])'
+q_and_print "peak container CPU, cse644-gitops namespace" 'max_over_time(sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="cse644-gitops"}[2m]))[6m:30s])'
 q_and_print "container memory working set" 'sum by (pod) (container_memory_working_set_bytes{namespace="cse644-gitops"})' '%.0f'
 q_and_print "Argo CD applications by sync status" 'sum by (sync_status) (argocd_app_info)' '%.0f'
 q_and_print "Argo CD applications by health" 'sum by (health_status) (argocd_app_info)' '%.0f'
