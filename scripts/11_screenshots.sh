@@ -16,11 +16,24 @@ source "$(dirname "$0")/lib.sh"
 SHOTS="$EVIDENCE/screenshots"
 mkdir -p "$SHOTS"
 
+# Every capture is wrapped in a wall-clock timeout, because
+# --virtual-time-budget is not one.
+#
+# Headless Chromium writes the screenshot when virtual time runs out, and
+# virtual time only advances while the page is idle. A single-page application
+# holding an EventSource open - which is exactly what the Argo CD UI does to
+# stream application status - never goes idle, so the budget never elapses, no
+# file is ever written, and the container runs forever. One did, for thirteen
+# minutes, before this wrapper existed.
+#
+# A failed capture is reported and skipped rather than being allowed to stall
+# the run. The assignment accepts readable command output as evidence, and for
+# anything numeric the transcripts are better evidence than an image.
 shoot() {
     local name="$1" url="$2" budget="${3:-8000}" size="${4:-1600,1200}"
+    local wall=$(( budget / 1000 + 25 ))
     echo "  $url"
-    echo "     -> evidence/screenshots/${name}.png"
-    docker run --rm --network host \
+    timeout "${wall}s" docker run --rm --network host \
         --add-host "${WEB_HOST}:127.0.0.1" \
         --add-host "${API_HOST}:127.0.0.1" \
         --add-host "${ARGO_HOST}:127.0.0.1" \
@@ -31,6 +44,12 @@ shoot() {
         --headless --disable-gpu --no-sandbox --hide-scrollbars \
         --window-size="${size}" --virtual-time-budget="${budget}" \
         --screenshot="/out/${name}.png" "$url" >/dev/null 2>&1
+    local rc=$?
+    if [ -s "${SHOTS}/${name}.png" ]; then
+        echo "     -> evidence/screenshots/${name}.png  ($(stat -c%s "${SHOTS}/${name}.png") bytes)"
+    else
+        echo "     -> NOT CAPTURED (exit ${rc}); see the transcripts for this one"
+    fi
 }
 
 echo "Capturing screenshots..."
@@ -41,19 +60,28 @@ shoot "01-web-application"        "http://${WEB_HOST}:8090/"
 shoot "02-api-application"        "http://${API_HOST}:8090/"
 
 echo
-echo "The GitOps controller:"
-# The Argo CD UI is a single-page application; it needs longer than a static
-# page before the tree has rendered.
-shoot "03-argocd-applications"    "http://${ARGO_HOST}:8090/applications" 20000
-shoot "04-argocd-platform-tree"   "http://${ARGO_HOST}:8090/applications/argocd/cse644-platform?view=tree&resource=" 20000
-shoot "05-argocd-monitoring-tree" "http://${ARGO_HOST}:8090/applications/argocd/cse644-monitoring?view=tree&resource=" 20000
-
+echo "The GitOps controller: not captured, deliberately."
+echo
+echo "  The Argo CD UI cannot be screenshotted by headless Chromium here and"
+echo "  the attempts are removed rather than left to fail on every run."
+echo "  --virtual-time-budget never elapses, because the page holds an"
+echo "  EventSource open to stream application status, so the browser runs"
+echo "  until something kills it and writes no file at all. Forcing the issue"
+echo "  with --timeout does produce a PNG, and what it contains is the"
+echo "  navigation shell with 'Loading...' where the application list should"
+echo "  be - identical at 12s and at 35s. An image of a spinner is worse than"
+echo "  no image."
+echo
+echo "  The assignment accepts selected command output as evidence, and for"
+echo "  this controller it is the better evidence anyway: evidence/04 lists"
+echo "  every object Argo CD created with its tracking annotation, evidence/07"
+echo "  contains the live-versus-desired diff as text, and evidence/08 shows"
+echo "  Synced and Degraded side by side."
 echo
 echo "Monitoring:"
 shoot "06-prometheus-targets"     "http://${PROM_HOST}:8090/targets" 15000
 shoot "07-prometheus-graph"       "http://${PROM_HOST}:8090/graph?g0.expr=sum+by+(route)+(rate(cse644_api_requests_total%5B1m%5D))&g0.tab=0&g0.range_input=30m" 20000
 shoot "08-grafana-dashboard"      "http://${GRAFANA_HOST}:8090/d/cse644-gitops/cse644-gitops-application-overview?orgId=1&from=now-30m&to=now&kiosk" 25000 "1600,1800"
-shoot "09-grafana-dashboard-1h"   "http://${GRAFANA_HOST}:8090/d/cse644-gitops/cse644-gitops-application-overview?orgId=1&from=now-1h&to=now&kiosk" 25000 "1600,1800"
 
 echo
 ls -l "$SHOTS"

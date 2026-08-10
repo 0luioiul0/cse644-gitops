@@ -56,6 +56,12 @@ note "finalizer waiting for the Application, and the only way out is to patch"
 note "the finalizers off both by hand. Hence the wait loop above, and the guard"
 note "below: the project is only removed once every Application is actually"
 note "gone."
+note "The same deadlock used to be unavoidable, because the project lived in"
+note "gitops/apps/ and was therefore managed by the root Application - which"
+note "also referenced it. Deleting the root required deleting the project,"
+note "deleting the project required no Application to reference it, and the"
+note "referencing Application was the root. It now lives in gitops/bootstrap/,"
+note "outside anything Argo CD manages, so the cascade can complete."
 LEFT=$(kargo get applications --no-headers 2>/dev/null | wc -l)
 if [ "$LEFT" = "0" ]; then
     run "kargo delete appproject cse644 --ignore-not-found"
